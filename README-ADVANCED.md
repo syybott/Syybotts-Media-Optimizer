@@ -1,6 +1,6 @@
 # SYYBOTT’S Media Optimizer — Advanced Guide
 
-*For basic setup and quick-start instructions, please read [README-SIMPLE.md](README-SIMPLE.md) first.*
+*For basic setup and quick-start instructions, please read [README-SIMPLE.md](README.md) first.*
 
 ## Mode Operations
 **Copy Mode Policies**: Destination behavior depends on the configured policy: Skip existing, Replace existing if smaller, or Rebuild (overwrite all).

@@ -1,4 +1,4 @@
-# SYYBOTT’S Media Optimizer
+# Syybott's Media Optimizer
 
 ## What It Does
 SYYBOTT’S Media Optimizer is a Windows application designed to optimize supported image and video files, reducing their storage footprint while attempting to maintain acceptable quality.

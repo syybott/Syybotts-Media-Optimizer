@@ -1,0 +1,48 @@
+name: Build Windows EXE v1.0.0-beta.1
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v1.0.0-beta.1"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install PS2EXE
+        shell: powershell
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module ps2exe -MinimumVersion 1.0.18 -Scope CurrentUser -Force -AllowClobber
+          Import-Module ps2exe -MinimumVersion 1.0.18 -Force
+
+      - name: Build executable
+        shell: powershell
+        run: |
+          $source = Join-Path $PWD "SYYBOTTS-Media-Optimizer-GUI-v1.0.0-beta.1.ps1"
+          $icon = Join-Path $PWD "SYYBOTTS-Media-Optimizer-build-v1.0.0-beta.1.ico"
+          $dist = Join-Path $PWD "dist"
+          $normalizedIcon = Join-Path $dist "SYYBOTTS-Media-Optimizer-build.ico"
+          $output = Join-Path $dist "SYYBOTTS-Media-Optimizer-v1.0.0-beta.1.exe"
+
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+          & ".\Build-SYYBOTTS-Media-Optimizer-EXE-v1.0.0-beta.1.ps1"
+        env:
+          CI: "true"
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: SYYBOTTS-Media-Optimizer-v1.0.0-beta.1-Windows
+          path: |
+            dist/SYYBOTTS-Media-Optimizer-v1.0.0-beta.1.exe
+            dist/SYYBOTTS-Media-Optimizer-v1.0.0-beta.1.exe.sha256
+          if-no-files-found: error

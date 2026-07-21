@@ -5413,50 +5413,73 @@ function Read-CopyModeOptions {
     $dialog.FormBorderStyle = "FixedDialog"
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
-    $dialog.ClientSize = New-Object Drawing.Size(455, 205)
+    $dialog.AutoSize = $true
+    $dialog.AutoSizeMode = "GrowAndShrink"
+    $dialog.Padding = New-Object Windows.Forms.Padding(18)
+
+    $layout = New-Object Windows.Forms.TableLayoutPanel
+    $layout.AutoSize = $true
+    $layout.AutoSizeMode = "GrowAndShrink"
+    $layout.ColumnCount = 1
+    $layout.RowCount = 5
+    $layout.Dock = "Fill"
+    $dialog.Controls.Add($layout)
 
     $label = New-Object Windows.Forms.Label
     $label.Text = "Destination handling:"
-    $label.Location = New-Object Drawing.Point(18, 18)
-    $label.Size = New-Object Drawing.Size(410, 22)
-    $dialog.Controls.Add($label)
+    $label.AutoSize = $true
+    $label.Margin = New-Object Windows.Forms.Padding(0, 0, 0, 4)
+    $layout.Controls.Add($label, 0, 0)
+
+    $graphics = $dialog.CreateGraphics()
+    $dpiScale = $graphics.DpiX / 96.0
+    $graphics.Dispose()
 
     $combo = New-Object Windows.Forms.ComboBox
     $combo.DropDownStyle = "DropDownList"
-    $combo.Location = New-Object Drawing.Point(18, 44)
-    $combo.Size = New-Object Drawing.Size(415, 28)
+    $combo.Width = [int](415 * $dpiScale)
+    $combo.Margin = New-Object Windows.Forms.Padding(0, 0, 0, 16)
     [void]$combo.Items.Add("Skip existing destination files")
     [void]$combo.Items.Add("Replace only when the new candidate is smaller")
     [void]$combo.Items.Add("Rebuild destination from scratch")
     $combo.SelectedIndex = 0
-    $dialog.Controls.Add($combo)
+    $layout.Controls.Add($combo, 0, 1)
 
     $verify = New-Object Windows.Forms.CheckBox
     $verify.Text = "Verify destination files when finished"
-    $verify.Location = New-Object Drawing.Point(18, 88)
-    $verify.Size = New-Object Drawing.Size(340, 25)
+    $verify.AutoSize = $true
     $verify.Checked = $true
-    $dialog.Controls.Add($verify)
+    $verify.Margin = New-Object Windows.Forms.Padding(0, 0, 0, 8)
+    $layout.Controls.Add($verify, 0, 2)
 
     $note = New-Object Windows.Forms.Label
     $note.Text = "The source library remains unchanged."
-    $note.Location = New-Object Drawing.Point(18, 120)
-    $note.Size = New-Object Drawing.Size(415, 22)
-    $dialog.Controls.Add($note)
+    $note.AutoSize = $true
+    $note.Margin = New-Object Windows.Forms.Padding(0, 0, 0, 16)
+    $layout.Controls.Add($note, 0, 3)
 
-    $ok = New-Object Windows.Forms.Button
-    $ok.Text = "Continue"
-    $ok.Location = New-Object Drawing.Point(252, 157)
-    $ok.Size = New-Object Drawing.Size(85, 30)
-    $ok.DialogResult = [Windows.Forms.DialogResult]::OK
-    $dialog.Controls.Add($ok)
+    $btnLayout = New-Object Windows.Forms.FlowLayoutPanel
+    $btnLayout.AutoSize = $true
+    $btnLayout.AutoSizeMode = "GrowAndShrink"
+    $btnLayout.FlowDirection = "RightToLeft"
+    $btnLayout.Dock = "Fill"
+    $btnLayout.Margin = New-Object Windows.Forms.Padding(0)
+    $layout.Controls.Add($btnLayout, 0, 4)
 
     $cancel = New-Object Windows.Forms.Button
     $cancel.Text = "Cancel"
-    $cancel.Location = New-Object Drawing.Point(347, 157)
-    $cancel.Size = New-Object Drawing.Size(85, 30)
+    $cancel.AutoSize = $true
+    $cancel.Padding = New-Object Windows.Forms.Padding(10, 2, 10, 2)
     $cancel.DialogResult = [Windows.Forms.DialogResult]::Cancel
-    $dialog.Controls.Add($cancel)
+    $btnLayout.Controls.Add($cancel)
+
+    $ok = New-Object Windows.Forms.Button
+    $ok.Text = "Continue"
+    $ok.AutoSize = $true
+    $ok.Padding = New-Object Windows.Forms.Padding(10, 2, 10, 2)
+    $ok.DialogResult = [Windows.Forms.DialogResult]::OK
+    $btnLayout.Controls.Add($ok)
+
     $dialog.AcceptButton = $ok
     $dialog.CancelButton = $cancel
 

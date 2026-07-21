@@ -383,6 +383,12 @@ do {
                     Path    = $Path
                     Message = $Message
                 })
+
+                if (-not [string]::IsNullOrWhiteSpace($script:ImageReportPath)) {
+                    $stamp = Get-Date -Format "HH:mm:ss"
+                    $line = "[$stamp] [$Type] '$Path': $Message"
+                    Add-Content -LiteralPath $script:ImageReportPath -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
+                }
             }
 
             function Test-JpegLargerWebPTag {
@@ -2116,6 +2122,26 @@ do {
             )
             $script:ImageIssues = New-Object System.Collections.Generic.List[object]
 
+            $imageHeader = New-Object System.Collections.Generic.List[string]
+            [void]$imageHeader.Add("SYYBOTT'S MEDIA OPTIMIZER v$MediaOptimizerVersion")
+            [void]$imageHeader.Add("IMAGE OPTIMIZATION REPORT")
+            [void]$imageHeader.Add("Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+            [void]$imageHeader.Add("Scan root: $targetFolder")
+            [void]$imageHeader.Add("")
+            [void]$imageHeader.Add("SETTINGS")
+            [void]$imageHeader.Add("PNG handling: $(if ($SkipPngFiles) { 'Skip PNG' } else { 'Process PNG' })")
+            [void]$imageHeader.Add("JPG/JPEG handling: $JpegHandlingDescription")
+            if (-not $SkipPngFiles) {
+                [void]$imageHeader.Add("PNG compression: $PngCompressionLevel/10")
+            }
+            if (-not $SkipJpegFiles) {
+                [void]$imageHeader.Add("JPG/JPEG WebP quality: $JpegQuality/100")
+            }
+            [void]$imageHeader.Add("Duplicate groups found: $($inventoryDuplicateGroups.Count)")
+            [void]$imageHeader.Add("Duplicate groups selected: $($collisionGroups.Count)")
+            [void]$imageHeader.Add("")
+            $imageHeader | Set-Content -LiteralPath $script:ImageReportPath -Encoding UTF8
+
             Write-Host ""
             Write-Host "Beginning conversion with immediate cleanup..." -ForegroundColor Magenta
             Write-Host "Report file: $script:ImageReportPath" -ForegroundColor DarkCyan
@@ -2603,26 +2629,9 @@ do {
             Write-Host "Test folders skipped:            $($script:SkippedTestFolders.Count)" -ForegroundColor DarkYellow
 
             $imageReportLines = New-Object System.Collections.Generic.List[string]
-            [void]$imageReportLines.Add("SYYBOTT'S MEDIA OPTIMIZER v$MediaOptimizerVersion")
-            [void]$imageReportLines.Add("IMAGE OPTIMIZATION REPORT")
-            [void]$imageReportLines.Add("Finished: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
-            [void]$imageReportLines.Add("Scan root: $targetFolder")
-            [void]$imageReportLines.Add("")
-            [void]$imageReportLines.Add("SETTINGS")
-            [void]$imageReportLines.Add(
-                "PNG handling: $(if ($SkipPngFiles) { 'Skip PNG' } else { 'Process PNG' })"
-            )
-            [void]$imageReportLines.Add("JPG/JPEG handling: $JpegHandlingDescription")
-            if (-not $SkipPngFiles) {
-                [void]$imageReportLines.Add("PNG compression: $PngCompressionLevel/10")
-            }
-            if (-not $SkipJpegFiles) {
-                [void]$imageReportLines.Add("JPG/JPEG WebP quality: $JpegQuality/100")
-            }
-            [void]$imageReportLines.Add("Duplicate groups found: $($inventoryDuplicateGroups.Count)")
-            [void]$imageReportLines.Add("Duplicate groups selected: $($collisionGroups.Count)")
             [void]$imageReportLines.Add("")
             [void]$imageReportLines.Add("SUMMARY")
+            [void]$imageReportLines.Add("Finished: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
             [void]$imageReportLines.Add("New conversions completed:       $newConversions")
             [void]$imageReportLines.Add("Existing-pair cleanups:          $existingPairsCleaned")
             [void]$imageReportLines.Add("Existing-pair skips:             $existingPairsSkipped")
@@ -2648,41 +2657,25 @@ do {
             [void]$imageReportLines.Add("Deletion errors:                 $deleteErrors")
             [void]$imageReportLines.Add("Actual net storage saved:        $(Format-ByteSize $netSavings)")
             [void]$imageReportLines.Add(("Library size reduction:           {0:N2}%" -f $imageStorageChangePercent))
-            [void]$imageReportLines.Add("Skipped reparse-point dirs:      $($script:SkippedReparsePointDirs.Count)")
-            [void]$imageReportLines.Add("Test folders skipped:            $($script:SkippedTestFolders.Count)")
-            [void]$imageReportLines.Add("")
-            [void]$imageReportLines.Add("ERRORS AND WARNINGS")
-
-            if ($script:ImageIssues.Count -eq 0) {
-                [void]$imageReportLines.Add("None")
-            }
-            else {
-                foreach ($issue in $script:ImageIssues) {
-                    [void]$imageReportLines.Add("[$($issue.Type)]")
-                    [void]$imageReportLines.Add("Path: $($issue.Path)")
-                    [void]$imageReportLines.Add("Details: $($issue.Message)")
-                    [void]$imageReportLines.Add("")
-                }
-            }
 
             if ($script:SkippedReparsePointDirs.Count -gt 0) {
+                [void]$imageReportLines.Add("")
                 [void]$imageReportLines.Add("SKIPPED LINKED DIRECTORIES")
                 foreach ($directory in $script:SkippedReparsePointDirs) {
                     [void]$imageReportLines.Add($directory)
                 }
-                [void]$imageReportLines.Add("")
             }
 
             if ($script:SkippedTestFolders.Count -gt 0) {
+                [void]$imageReportLines.Add("")
                 [void]$imageReportLines.Add("EXCLUDED TEST FOLDERS")
                 foreach ($directory in $script:SkippedTestFolders) {
                     [void]$imageReportLines.Add($directory)
                 }
-                [void]$imageReportLines.Add("")
             }
 
             $imageReportLines |
-                Set-Content -LiteralPath $script:ImageReportPath -Encoding UTF8
+                Add-Content -LiteralPath $script:ImageReportPath -Encoding UTF8
 
             Write-Host "Report file:                       $script:ImageReportPath" -ForegroundColor DarkCyan
             Write-Host ""

@@ -4,10 +4,10 @@
 A Windows application designed to optimize supported image and video files, reducing their storage footprint while attempting to maintain acceptable quality
 
 It operates in four major modes:
-**Copy Mode**: Optimizes media from a source folder and places the results into a separate destination folder
-**Modify Mode**: Optimizes media directly in the chosen folder, replacing the original files in-place when a smaller optimized version is successfully generated
-**Image Test**: Generates test optimizations for a single image to help you evaluate quality and savings
-**Video Test**: Generates test optimizations for a single video to help you evaluate playback and quality
+- **Copy Mode**: Optimizes media from a source folder and places the results into a separate destination folder
+- **Modify Mode**: Optimizes media directly in the chosen folder, replacing the original files in-place when a smaller optimized version is successfully generated
+- **Image Test**: Generates test optimizations for a single image to help you evaluate quality and savings
+- **Video Test**: Generates test optimizations for a single video to help you evaluate playback and quality
 
 ## Before You Start
 **WARNING**: Modify Mode operates in-place and **will permanently delete or replace your original files** if an optimization is successful

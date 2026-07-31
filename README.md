@@ -7,10 +7,10 @@ video files while retaining configurable quality.
 
 The current Windows release is
 [v1.0.0-beta.3](https://github.com/syybott/Syybotts-Media-Optimizer/releases/tag/v1.0.0-beta.3).
-The application is portable and does not require a separate installer
+The application is portable and does not require a separate installer. The ZIP
+contains the EXE and its SHA-256 file at the archive root
 
-- [Download the Windows EXE](https://github.com/syybott/Syybotts-Media-Optimizer/releases/download/v1.0.0-beta.3/SYYBOTTS-Media-Optimizer-1.0.0-beta.3.exe)
-- [Download its SHA-256 file](https://github.com/syybott/Syybotts-Media-Optimizer/releases/download/v1.0.0-beta.3/SYYBOTTS-Media-Optimizer-1.0.0-beta.3.exe.sha256)
+- [Download the Windows ZIP package](https://github.com/syybott/Syybotts-Media-Optimizer/releases/download/v1.0.0-beta.3/SYYBOTTS-Media-Optimizer-1.0.0-beta.3.zip)
 
 On first use, select **Download Tools** to install verified copies of cwebp,
 FFmpeg, and ffprobe beside the application. Tool downloads use streaming HTTPS
@@ -19,10 +19,11 @@ automatic fallback
 
 ## Quick start
 
-1. Download the EXE and `.sha256` file into the same folder
-2. Run the EXE and choose the media library folder
-3. Select **Download Tools** if the required tools are not already available
-4. Use a Test mode before processing a full library
+1. Download the ZIP package
+2. Use **Extract All** so Windows creates the application folder
+3. Run the EXE and choose the media library folder
+4. Select **Download Tools** if the required tools are not already available
+5. Use a Test mode before processing a full library
 
 ## Modes
 

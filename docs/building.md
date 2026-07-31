@@ -51,4 +51,5 @@ A build without artwork remains functional
 2. Run the static, safety, and Pester checks
 3. Build the EXE and verify its `.sha256` sidecar
 4. Merge the validated release branch into `main`
-5. Tag the merged commit and attach both files to the GitHub release
+5. Package the EXE and sidecar together at the root of a versioned ZIP
+6. Tag the merged commit and attach the ZIP to the GitHub release

@@ -1,15 +1,34 @@
-#requires -version 5.1
+﻿#requires -version 5.1
+[CmdletBinding()]
+param(
+    [string]$OutputFile = ""
+)
+
 $ErrorActionPreference = "Stop"
 
-$BuildVersion = "1.0.0.1"
-$MinimumPS2EXEVersion = [version]"1.0.18"
-$SourceFile = Join-Path $PSScriptRoot "SYYBOTTS-Media-Optimizer-GUI-v1.0.0-beta.1.ps1"
-$EngineFile = Join-Path $PSScriptRoot "SYYBOTTS-Media-Optimizer-v1.0.31.ps1"
-$CopyWorkerFile = Join-Path $PSScriptRoot "SYYBOTTS-Copy-Mode-v1.0.3.ps1"
-$IconFile = Join-Path $PSScriptRoot "SYYBOTTS-Media-Optimizer-build-v1.0.0-beta.1.ico"
-$FightMascotFile = Join-Path $PSScriptRoot "Assets\Fight-Mode-Mascot.png"
-$OutputDirectory = Join-Path $PSScriptRoot "dist"
-$OutputFile = Join-Path $OutputDirectory "SYYBOTTS-Media-Optimizer-v1.0.0-beta.1.exe"
+$RepositoryRoot = Split-Path -Parent $PSScriptRoot
+$VersionFile = Join-Path $RepositoryRoot "version.json"
+if (-not (Test-Path -LiteralPath $VersionFile -PathType Leaf)) {
+    throw "Missing version manifest: $VersionFile"
+}
+$VersionManifest = Get-Content -LiteralPath $VersionFile -Raw | ConvertFrom-Json
+$ProductVersion = [string]$VersionManifest.productVersion
+$BuildVersion = [string]$VersionManifest.fileVersion
+$RequiredPS2EXEVersion = [version][string]$VersionManifest.ps2exeVersion
+$SourceFile = Join-Path $RepositoryRoot "src\MediaOptimizer.Gui.ps1"
+$EngineFile = Join-Path $RepositoryRoot "src\MediaOptimizer.Engine.ps1"
+$CopyWorkerFile = Join-Path $RepositoryRoot "src\MediaOptimizer.CopyWorker.ps1"
+$IconFile = Join-Path $RepositoryRoot "assets\app.ico"
+$FightMascotFile = Join-Path $RepositoryRoot "assets\fight-mode-mascot.png"
+$OutputDirectory = Join-Path $RepositoryRoot "dist"
+if ([string]::IsNullOrWhiteSpace($OutputFile)) {
+    $OutputFile = Join-Path $OutputDirectory "SYYBOTTS-Media-Optimizer-$ProductVersion.exe"
+}
+elseif (-not [IO.Path]::IsPathRooted($OutputFile)) {
+    $OutputFile = Join-Path $RepositoryRoot $OutputFile
+}
+$OutputFile = [IO.Path]::GetFullPath($OutputFile)
+$OutputDirectory = Split-Path -Parent $OutputFile
 $PreparedSourceFile = $null
 
 Add-Type -AssemblyName System.Drawing
@@ -47,63 +66,70 @@ try {
         Stop-WithError "Missing Copy Mode worker: $CopyWorkerFile"
     }
 
-    if (-not (Test-Path -LiteralPath $IconFile -PathType Leaf)) {
-        Stop-WithError "Missing icon file: $IconFile"
-    }
+    $HasIcon = Test-Path -LiteralPath $IconFile -PathType Leaf
+    $HasFightMascot = Test-Path -LiteralPath $FightMascotFile -PathType Leaf
 
-    if (-not (Test-Path -LiteralPath $FightMascotFile -PathType Leaf)) {
-        Stop-WithError "Missing Fight Mode mascot: $FightMascotFile"
-    }
+    if ($HasIcon) {
+        try {
+            $sourceIcon = New-Object System.Drawing.Icon($IconFile)
 
-    try {
-        $sourceIcon = New-Object System.Drawing.Icon($IconFile)
-
-        if ($sourceIcon.Width -lt 1 -or $sourceIcon.Height -lt 1) {
-            throw "The icon does not contain a readable Windows icon frame."
+            if ($sourceIcon.Width -lt 1 -or $sourceIcon.Height -lt 1) {
+                throw "The icon does not contain a readable Windows icon frame."
+            }
+        }
+        catch {
+            Stop-WithError "The supplied ICO is not readable by Windows: $($_.Exception.Message)"
+        }
+        finally {
+            if ($null -ne $sourceIcon) {
+                $sourceIcon.Dispose()
+            }
         }
     }
-    catch {
-        Stop-WithError "The supplied ICO is not readable by Windows: $($_.Exception.Message)"
-    }
-    finally {
-        if ($null -ne $sourceIcon) {
-            $sourceIcon.Dispose()
-        }
+    else {
+        Write-Warning "No application icon was found. The executable will use the default PS2EXE icon."
     }
 
-    try {
-        $mascotImage = [System.Drawing.Image]::FromFile($FightMascotFile)
+    if ($HasFightMascot) {
+        try {
+            $mascotImage = [System.Drawing.Image]::FromFile($FightMascotFile)
 
-        if ($mascotImage.Width -lt 1 -or $mascotImage.Height -lt 1) {
-            throw "The mascot image does not contain a readable image frame."
+            if ($mascotImage.Width -lt 1 -or $mascotImage.Height -lt 1) {
+                throw "The mascot image does not contain a readable image frame."
+            }
+        }
+        catch {
+            Stop-WithError "The Fight Mode mascot is not readable: $($_.Exception.Message)"
+        }
+        finally {
+            if ($null -ne $mascotImage) {
+                $mascotImage.Dispose()
+            }
         }
     }
-    catch {
-        Stop-WithError "The Fight Mode mascot is not readable: $($_.Exception.Message)"
-    }
-    finally {
-        if ($null -ne $mascotImage) {
-            $mascotImage.Dispose()
-        }
+    else {
+        Write-Warning "No Fight Mode mascot was found. Fight Mode will use its text-only presentation."
     }
 
     [void](New-Item -ItemType Directory -Path $OutputDirectory -Force)
 
     Write-Host "SYYBOTT'S MEDIA OPTIMIZER EXE BUILDER" -ForegroundColor Magenta
     Write-Host "Source: $SourceFile"
-    Write-Host "Icon: $IconFile"
-    Write-Host "Fight Mode mascot: $FightMascotFile"
+    Write-Host "Product version: $ProductVersion"
+    Write-Host "Icon: $(if ($HasIcon) { $IconFile } else { '[default]' })"
+    Write-Host "Fight Mode mascot: $(if ($HasFightMascot) { $FightMascotFile } else { '[not embedded]' })"
     Write-Host "Output: $OutputFile"
     Write-Host ""
 
     $existingModule = Get-Module -ListAvailable -Name ps2exe |
-        Where-Object { $_.Version -ge $MinimumPS2EXEVersion } |
+        Where-Object { $_.Version -eq $RequiredPS2EXEVersion } |
         Sort-Object Version -Descending |
         Select-Object -First 1
 
     if ($null -eq $existingModule) {
-        Write-Host "Installing the current PS2EXE release (minimum $MinimumPS2EXEVersion) for the current user..." -ForegroundColor Cyan
+        Write-Host "Installing pinned PS2EXE $RequiredPS2EXEVersion for the current user..." -ForegroundColor Cyan
 
+        Import-Module PowerShellGet -Force -ErrorAction Stop
         $repository = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
 
         if ($null -eq $repository) {
@@ -123,7 +149,7 @@ try {
 
             Install-Module `
                 -Name ps2exe `
-                -MinimumVersion $MinimumPS2EXEVersion `
+                -RequiredVersion $RequiredPS2EXEVersion `
                 -Scope CurrentUser `
                 -Force `
                 -AllowClobber `
@@ -141,13 +167,13 @@ try {
         }
 
         $existingModule = Get-Module -ListAvailable -Name ps2exe |
-            Where-Object { $_.Version -ge $MinimumPS2EXEVersion } |
+            Where-Object { $_.Version -eq $RequiredPS2EXEVersion } |
             Sort-Object Version -Descending |
             Select-Object -First 1
     }
 
     if ($null -eq $existingModule) {
-        Stop-WithError "PS2EXE $MinimumPS2EXEVersion or newer could not be installed or located."
+        Stop-WithError "Pinned PS2EXE $RequiredPS2EXEVersion could not be installed or located."
     }
 
     Write-Host "Using PS2EXE $($existingModule.Version)." -ForegroundColor Green
@@ -164,10 +190,31 @@ try {
         Stop-WithError "The GUI source does not contain the Fight Mode asset marker."
     }
 
-    $mascotBase64 = [System.Convert]::ToBase64String(
-        [System.IO.File]::ReadAllBytes($FightMascotFile)
+    $preparedSource = $sourceText
+    $preparedSource = [regex]::Replace(
+        $preparedSource,
+        '(?m)^\$GuiVersion\s*=\s*"[^"]*"\s*$',
+        ('$GuiVersion = "' + $ProductVersion.Replace('"', '\"') + '"'),
+        1
     )
-    $preparedSource = $sourceText.Replace($assetMarker, $mascotBase64)
+    $preparedSource = [regex]::Replace(
+        $preparedSource,
+        '(?m)^\$EngineVersion\s*=\s*"[^"]*"\s*$',
+        ('$EngineVersion = "' + ([string]$VersionManifest.engineVersion) + '"'),
+        1
+    )
+    $preparedSource = [regex]::Replace(
+        $preparedSource,
+        '(?m)^\$CopyWorkerVersion\s*=\s*"[^"]*"\s*$',
+        ('$CopyWorkerVersion = "' + ([string]$VersionManifest.copyWorkerVersion) + '"'),
+        1
+    )
+    if ($HasFightMascot) {
+        $mascotBase64 = [System.Convert]::ToBase64String(
+            [System.IO.File]::ReadAllBytes($FightMascotFile)
+        )
+        $preparedSource = $preparedSource.Replace($assetMarker, $mascotBase64)
+    }
 
     $engineBytes = [IO.File]::ReadAllBytes($EngineFile)
     $engineMemory = New-Object IO.MemoryStream
@@ -211,33 +258,37 @@ try {
         (New-Object System.Text.UTF8Encoding($false))
     )
 
-    Invoke-ps2exe `
-        -inputFile $PreparedSourceFile `
-        -outputFile $OutputFile `
-        -x64 `
-        -STA `
-        -noConsole `
-        -DPIAware `
-        -supportOS `
-        -iconFile $IconFile `
-        -title "SYYBOTT'S Media Optimizer" `
-        -description "Image and video media optimization utility" `
-        -company "SYYBOTT" `
-        -product "SYYBOTT'S Media Optimizer" `
-        -copyright "Copyright 2026 SYYBOTT" `
-        -version $BuildVersion
+    $ps2exeParameters = @{
+        inputFile = $PreparedSourceFile
+        outputFile = $OutputFile
+        x64 = $true
+        STA = $true
+        noConsole = $true
+        DPIAware = $true
+        supportOS = $true
+        title = "SYYBOTT'S Media Optimizer"
+        description = "Image and video media optimization utility"
+        company = "SYYBOTT"
+        product = "SYYBOTT'S Media Optimizer"
+        copyright = "Copyright 2026 SYYBOTT"
+        version = $BuildVersion
+    }
+    if ($HasIcon) {
+        $ps2exeParameters.iconFile = $IconFile
+    }
+    Invoke-ps2exe @ps2exeParameters
 
     if (-not (Test-Path -LiteralPath $OutputFile -PathType Leaf)) {
         Stop-WithError "PS2EXE did not create the expected executable."
     }
 
-    $embeddedIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($OutputFile)
-
-    if ($null -eq $embeddedIcon) {
-        Stop-WithError "The compiled EXE does not expose an embedded icon."
+    if ($HasIcon) {
+        $embeddedIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($OutputFile)
+        if ($null -eq $embeddedIcon) {
+            Stop-WithError "The compiled EXE does not expose the supplied icon."
+        }
+        $embeddedIcon.Dispose()
     }
-
-    $embeddedIcon.Dispose()
 
     $hash = Get-FileHash -LiteralPath $OutputFile -Algorithm SHA256
     $hashFile = "$OutputFile.sha256"

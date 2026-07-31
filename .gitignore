@@ -1,0 +1,35 @@
+# Build products
+dist/
+artifacts/
+work/
+*.exe
+*.exe.sha256
+
+# Runtime data and downloaded tools
+Configuration/
+Logs/
+Diagnostics/
+cwebp.exe
+ffmpeg.exe
+ffprobe.exe
+*.download-new
+*.download-backup
+*.copy-part
+*.tmp
+*.part
+
+# PowerShell and test output
+TestResults/
+testResults.xml
+*.trx
+*.nunit.xml
+coverage.xml
+*.prepared.ps1
+
+# Editors and operating systems
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store

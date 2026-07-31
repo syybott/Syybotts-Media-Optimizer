@@ -1,32 +1,98 @@
-# Syybott's Media Optimizer
+﻿# Syybott's Media Optimizer
 
-## What It Does
-A Windows application designed to optimize supported image and video files, reducing their storage footprint while attempting to maintain acceptable quality
+A Windows application for reducing the storage used by supported image and
+video files while retaining configurable quality.
 
-It operates in four major modes:
-- **Copy Mode**: Optimizes media from a source folder and places the results into a separate destination folder
-- **Modify Mode**: Optimizes media directly in the chosen folder, replacing the original files in-place when a smaller optimized version is successfully generated
-- **Image Test**: Generates test optimizations for a single image to help you evaluate quality and savings
-- **Video Test**: Generates test optimizations for a single video to help you evaluate playback and quality
+## Download
 
-## Before You Start
-**WARNING**: Modify Mode operates in-place and **will permanently delete or replace your original files** if an optimization is successful
+The current Windows release is
+[v1.0.0-beta.3](https://github.com/syybott/Syybotts-Media-Optimizer/releases/tag/v1.0.0-beta.3).
+The application is portable and does not require a separate installer
 
-Always back up your important media libraries to a separate drive or location before running Modify Mode
+- [Download the Windows EXE](https://github.com/syybott/Syybotts-Media-Optimizer/releases/download/v1.0.0-beta.3/SYYBOTTS-Media-Optimizer-1.0.0-beta.3.exe)
+- [Download its SHA-256 file](https://github.com/syybott/Syybotts-Media-Optimizer/releases/download/v1.0.0-beta.3/SYYBOTTS-Media-Optimizer-1.0.0-beta.3.exe.sha256)
 
-## Basic Use
-1. Open the application
-2. Choose the folder containing your media
-3. Choose image or video processing from the main interface
-4. Use Test Mode first when desired to preview the results
-5. Review the generated test outputs to ensure the quality meets your needs
-6. Run the full operation.
+On first use, select **Download Tools** to install verified copies of cwebp,
+FFmpeg, and ffprobe beside the application. Tool downloads use streaming HTTPS
+with live size, speed, and ETA reporting, with foreground BITS available as an
+automatic fallback
 
-## Test Modes
-- A test run processes one eligible source file at a time
-- Repeated test runs automatically continue to the next untested source file
-- Generated test outputs are explicitly excluded from being reused as source files in future operations
-- The application will report when no untested files remain in the selected folder
+## Quick start
 
-## Important
-Keep the entire release folder together. The application relies on external required tools (such as FFmpeg and cwebp) which may be downloaded and stored directly beside the application executable. Moving the application without these tools will require them to be downloaded again.
+1. Download the EXE and `.sha256` file into the same folder
+2. Run the EXE and choose the media library folder
+3. Select **Download Tools** if the required tools are not already available
+4. Use a Test mode before processing a full library
+
+## Modes
+
+- **Copy Mode** writes optimized media to a separate destination and leaves the
+  source library unchanged
+- **Modify Mode** validates an optimized candidate and then replaces the source
+  through a backup-and-rollback transaction
+- **Image Test** generates sample image outputs without replacing the source
+- **Video Test** generates sample video outputs without replacing the source
+
+JPG/JPEG and video processing each have an independent minimum-savings setting.
+Both default to 5%. A production candidate must be valid, strictly smaller, and
+meet the selected percentage before it can replace or be copied instead of the
+original. Setting a threshold to 0% restores the previous
+"any strictly smaller candidate" behavior. Test modes always retain valid
+samples and label whether each sample passes the threshold.
+
+## Safety warning
+
+Modify Mode permanently replaces source files after successful validation.
+Copy Mode's Rebuild policy permanently removes everything inside the confirmed
+destination before recreating it. Keep an independent backup of important media
+and use the test modes before processing a library.
+
+The Rebuild worker rejects filesystem roots, protected operating-system
+directories, source/destination overlap, and any destination that does not
+exactly match the path confirmed by the GUI.
+
+## Running from source
+
+Requirements:
+
+- 64-bit Windows
+- Windows PowerShell 5.1
+
+Run `src\MediaOptimizer.Gui.ps1`. The application can download its pinned WebP
+tools and FFmpeg dependencies when they are not already beside the application.
+Both archives are verified with SHA-256 before extraction and atomic
+installation
+
+User settings and logs are stored under:
+
+```text
+%LOCALAPPDATA%\SYYBOTT\Media Optimizer
+```
+
+## Building
+
+Run `build\Build-MediaOptimizer.cmd`. The build reads all version information
+from `version.json`, embeds the engine and Copy Mode worker, creates a SHA-256
+file, and writes artifacts to `dist`.
+
+Custom artwork is optional:
+
+```text
+assets\app.ico
+assets\fight-mode-mascot.png
+```
+
+Without these assets, the executable uses the default PS2EXE icon and Fight
+Mode uses its text-only presentation. See [Building](docs/building.md) for the
+full process.
+
+## Documentation
+
+- [Advanced behavior](README-ADVANCED.md)
+- [Building and validation](docs/building.md)
+- [Recovery guidance](docs/recovery.md)
+- [Security policy](SECURITY.md)
+
+## License
+
+See [LICENSE](LICENSE).

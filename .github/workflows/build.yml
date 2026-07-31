@@ -1,0 +1,68 @@
+name: Build Windows executable
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "**.ps1"
+      - "**.cmd"
+      - "version.json"
+      - "assets/**"
+      - ".github/workflows/build.yml"
+  push:
+    branches:
+      - "main"
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate PowerShell source
+        shell: powershell
+        run: |
+          .\tests\Invoke-StaticChecks.ps1
+          .\tests\Invoke-SafetyChecks.ps1
+
+      - name: Run safety tests
+        shell: powershell
+        run: |
+          Install-Module Pester -RequiredVersion 5.6.1 -Scope CurrentUser -Force -SkipPublisherCheck
+          Invoke-Pester -Path .\tests -CI
+
+      - name: Install pinned PS2EXE
+        shell: powershell
+        run: |
+          $version = (Get-Content .\version.json -Raw | ConvertFrom-Json).ps2exeVersion
+          Install-Module ps2exe -RequiredVersion $version -Scope CurrentUser -Force -AllowClobber
+
+      - name: Build executable
+        shell: powershell
+        env:
+          CI: "true"
+        run: .\build\Build-MediaOptimizer.ps1
+
+      - name: Verify artifacts
+        shell: powershell
+        run: |
+          $version = (Get-Content .\version.json -Raw | ConvertFrom-Json).productVersion
+          $exe = ".\dist\SYYBOTTS-Media-Optimizer-$version.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Missing $exe" }
+          if (-not (Test-Path -LiteralPath "$exe.sha256" -PathType Leaf)) { throw "Missing $exe.sha256" }
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: SYYBOTTS-Media-Optimizer-Windows
+          path: |
+            dist/*.exe
+            dist/*.exe.sha256
+          if-no-files-found: error

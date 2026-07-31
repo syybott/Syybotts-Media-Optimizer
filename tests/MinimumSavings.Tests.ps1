@@ -121,4 +121,26 @@ Describe "Minimum savings integration" {
         $engineSource | Should -Match 'Test outputs below minimum:'
         $engineSource | Should -Not -Match 'No storage savings with this test setting.*Test output discarded'
     }
+
+    It "keeps the Video Test description below the savings hint" {
+        $guiSource = Get-Content -LiteralPath $guiPath -Raw
+        $hintBounds = [regex]::Match(
+            $guiSource,
+            '(?s)\$videoMinimumSavingsHint\.Location\s*=\s*New-Object System\.Drawing\.Point\(\d+,\s*(\d+)\).*?\$videoMinimumSavingsHint\.Size\s*=\s*New-Object System\.Drawing\.Size\(\d+,\s*(\d+)\)'
+        )
+        $testInfoLocation = [regex]::Match(
+            $guiSource,
+            '\$videoTestInfoLabel\.Location\s*=\s*New-Object System\.Drawing\.Point\(\d+,\s*(\d+)\)'
+        )
+
+        $hintBounds.Success | Should -BeTrue
+        $testInfoLocation.Success | Should -BeTrue
+
+        $hintBottom = (
+            [int]$hintBounds.Groups[1].Value +
+            [int]$hintBounds.Groups[2].Value
+        )
+        [int]$testInfoLocation.Groups[1].Value |
+            Should -BeGreaterThan $hintBottom
+    }
 }

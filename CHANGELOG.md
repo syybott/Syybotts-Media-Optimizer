@@ -25,6 +25,8 @@
   inferred CRF ranks.
 - Switched required-tool downloads to streaming HTTPS with live speed and ETA
   reporting, retaining foreground BITS as an automatic fallback
+- Corrected overlapping helper text in the Video optimization panel at scaled
+  display sizes
 
 ### Security
 

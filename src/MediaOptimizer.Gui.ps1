@@ -2257,7 +2257,7 @@ $videoTab.Controls.Add($encoderModeInfoLabel)
 
 $videoTestInfoLabel = New-Object System.Windows.Forms.Label
 $videoTestInfoLabel.Text = "Creates one test encode from the first supported video alphabetically. The source is never changed."
-$videoTestInfoLabel.Location = New-Object System.Drawing.Point(575, 168)
+$videoTestInfoLabel.Location = New-Object System.Drawing.Point(575, 200)
 $videoTestInfoLabel.Size = New-Object System.Drawing.Size(385, 58)
 $videoTestInfoLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
 $videoTab.Controls.Add($videoTestInfoLabel)

@@ -88,7 +88,7 @@ if (Test-Path -LiteralPath $guiPath -PathType Leaf) {
     }
     $webPChecksum = [regex]::Match(
         $guiSource,
-        '(?m)^\$WebPArchiveSha256\s*=\s*"([a-fA-F0-9]{64})"$'
+        '(?m)^\$WebPArchiveSha256\s*=\s*"([a-fA-F0-9]{64})"\r?$'
     )
     if (-not $webPChecksum.Success) {
         [void]$failures.Add("The pinned WebP SHA-256 checksum is missing or invalid.")

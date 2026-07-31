@@ -8,14 +8,14 @@ Supported sources are `.jpg`, `.jpeg`, `.png`, `.bmp`, `.tiff`, `.tif`, and
 `.heic`. Outputs use WebP.
 
 - PNG sources use lossless WebP. In Modify Mode, a validated lossless result
-  replaces the PNG even when the WebP is larger.
+  replaces the PNG even when the WebP is larger
 - Other supported images use lossy WebP at the selected quality. JPG/JPEG
   candidates replace the source only when valid, strictly smaller, and at or
-  above the configured minimum savings (5% by default).
+  above the configured minimum savings (5% by default)
 - A larger JPEG attempt may be recorded in the NTFS alternate data stream
-  `SYYBOTT.WebP.LargerAttempt` so later runs can skip the same work.
+  `SYYBOTT.WebP.LargerAttempt` so later runs can skip the same work
 - Image metadata, color profiles, and filesystem timestamps are not guaranteed
-  to survive conversion. Preserve originals when those properties matter.
+  to survive conversion. Preserve originals when those properties matter
 
 Sources such as `image.jpg` and `image.png` compete for the same `image.webp`
 name. Review reports carefully until deterministic collision naming is added.
@@ -35,6 +35,11 @@ profile, CRF, and profile rank. Editing or remuxing may remove that marker.
 Multiple audio tracks, subtitles, attachments, rotation, and color metadata are
 not guaranteed to be retained.
 
+Videos carrying a compatible current or legacy optimizer marker are skipped
+when their recorded profile rank is already equal to or better than the
+selected profile. Explicit marker ranks take precedence over ranks inferred
+from older CRF-only markers
+
 ## Selection and test outputs
 
 Supported files are enumerated recursively in case-insensitive path order.
@@ -50,9 +55,9 @@ candidate to be strictly smaller in Copy and Modify modes.
 
 ## Copy Mode
 
-- **Skip** preserves existing destination files.
-- **Replace if smaller** replaces only when the new candidate is smaller.
-- **Rebuild** permanently removes the confirmed destination contents first.
+- **Skip** preserves existing destination files
+- **Replace if smaller** replaces only when the new candidate is smaller
+- **Rebuild** permanently removes the confirmed destination contents first
 
 Converted JPEG and video candidates also have to meet their respective
 minimum-savings thresholds. Otherwise Copy Mode copies the original.
@@ -83,5 +88,7 @@ Reports use names such as
 `SYYBOTT-Media-Optimizer-Report-yyyyMMdd-HHmmss.txt`.
 
 The application downloads `cwebp.exe`, `ffmpeg.exe`, and `ffprobe.exe` when
-needed. The pinned WebP archive and distributor-published FFmpeg archive are
-verified with SHA-256 before extraction and atomic installation.
+needed. Streaming HTTPS is used first, with live size, speed, and ETA reporting;
+foreground BITS is retained as an automatic fallback. The pinned WebP archive
+and distributor-published FFmpeg archive are verified with SHA-256 before safe
+extraction and atomic installation

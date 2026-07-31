@@ -3,14 +3,35 @@
 A Windows application for reducing the storage used by supported image and
 video files while retaining configurable quality.
 
+## Download
+
+The current Windows release is
+[v1.0.0-beta.3](https://github.com/syybott/Syybotts-Media-Optimizer/releases/tag/v1.0.0-beta.3).
+The application is portable and does not require a separate installer
+
+- [Download the Windows EXE](https://github.com/syybott/Syybotts-Media-Optimizer/releases/download/v1.0.0-beta.3/SYYBOTTS-Media-Optimizer-1.0.0-beta.3.exe)
+- [Download its SHA-256 file](https://github.com/syybott/Syybotts-Media-Optimizer/releases/download/v1.0.0-beta.3/SYYBOTTS-Media-Optimizer-1.0.0-beta.3.exe.sha256)
+
+On first use, select **Download Tools** to install verified copies of cwebp,
+FFmpeg, and ffprobe beside the application. Tool downloads use streaming HTTPS
+with live size, speed, and ETA reporting, with foreground BITS available as an
+automatic fallback
+
+## Quick start
+
+1. Download the EXE and `.sha256` file into the same folder
+2. Run the EXE and choose the media library folder
+3. Select **Download Tools** if the required tools are not already available
+4. Use a Test mode before processing a full library
+
 ## Modes
 
 - **Copy Mode** writes optimized media to a separate destination and leaves the
-  source library unchanged.
+  source library unchanged
 - **Modify Mode** validates an optimized candidate and then replaces the source
-  through a backup-and-rollback transaction.
-- **Image Test** generates sample image outputs without replacing the source.
-- **Video Test** generates sample video outputs without replacing the source.
+  through a backup-and-rollback transaction
+- **Image Test** generates sample image outputs without replacing the source
+- **Video Test** generates sample video outputs without replacing the source
 
 JPG/JPEG and video processing each have an independent minimum-savings setting.
 Both default to 5%. A production candidate must be valid, strictly smaller, and
@@ -39,7 +60,8 @@ Requirements:
 
 Run `src\MediaOptimizer.Gui.ps1`. The application can download its pinned WebP
 tools and FFmpeg dependencies when they are not already beside the application.
-Both archives are verified with SHA-256 before installation.
+Both archives are verified with SHA-256 before extraction and atomic
+installation
 
 User settings and logs are stored under:
 

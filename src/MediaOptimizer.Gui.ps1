@@ -3981,7 +3981,7 @@ function Download-FileWithProgress {
             [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead
         ).Result
 
-        $response.EnsureSuccessStatusCode()
+        [void]$response.EnsureSuccessStatusCode()
         $totalLength = $response.Content.Headers.ContentLength
         $inputStream = $response.Content.ReadAsStreamAsync().Result
         $outputStream = New-Object System.IO.FileStream(
@@ -3994,34 +3994,97 @@ function Download-FileWithProgress {
         try {
             $buffer = New-Object byte[] (1MB)
             [long]$downloaded = 0
+            [long]$lastSampleBytes = 0
+            $startedAt = [DateTime]::UtcNow
+            $lastSampleTime = $startedAt
+            $lastOutput = $startedAt
             $lastPercent = -1
-            $lastOutput = [DateTime]::MinValue
 
             while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
                 $outputStream.Write($buffer, 0, $read)
                 $downloaded += $read
 
                 if ($totalLength -and $totalLength -gt 0) {
-                    $percent = [math]::Min(
-                        100,
-                        [int](($downloaded * 100L) / $totalLength)
-                    )
+                    $now = [DateTime]::UtcNow
+                    $percent = if ($downloaded -ge $totalLength) {
+                        100
+                    }
+                    else {
+                        [math]::Min(
+                            99,
+                            [int][math]::Floor(
+                                ($downloaded * 100.0) / $totalLength
+                            )
+                        )
+                    }
 
                     if (
                         $percent -ne $lastPercent -and
                         (
                             $percent -eq 100 -or
-                            ([DateTime]::UtcNow - $lastOutput).TotalMilliseconds -ge 400
+                            ($now - $lastOutput).TotalMilliseconds -ge 400
                         )
                     ) {
-                        Write-Output ("[DOWNLOAD] {0} {1}%" -f $Label, $percent)
+                        $sampleSeconds = ($now - $lastSampleTime).TotalSeconds
+                        [double]$bytesPerSecond = 0
+
+                        if ($sampleSeconds -gt 0) {
+                            $bytesPerSecond = [math]::Max(
+                                0,
+                                ($downloaded - $lastSampleBytes) /
+                                $sampleSeconds
+                            )
+                        }
+
+                        $speedText = if ($bytesPerSecond -gt 0) {
+                            "{0:N2} MB/s" -f ($bytesPerSecond / 1MB)
+                        }
+                        else {
+                            "calculating"
+                        }
+
+                        $etaText = if ($bytesPerSecond -gt 0) {
+                            Format-TransferEta -Seconds (
+                                ($totalLength - $downloaded) /
+                                $bytesPerSecond
+                            )
+                        }
+                        else {
+                            "calculating"
+                        }
+
+                        Write-Output (
+                            "[DOWNLOAD] {0}% | {1} {2} / {3} | {4} | ETA {5}" -f
+                            $percent,
+                            $Label,
+                            (Format-TransferSize -Bytes $downloaded),
+                            (Format-TransferSize -Bytes $totalLength),
+                            $speedText,
+                            $etaText
+                        )
+
                         $lastPercent = $percent
-                        $lastOutput = [DateTime]::UtcNow
+                        $lastOutput = $now
+                        $lastSampleTime = $now
+                        $lastSampleBytes = $downloaded
                     }
                 }
             }
 
             $outputStream.Flush()
+
+            if (
+                $totalLength -and
+                $totalLength -gt 0 -and
+                $downloaded -ne $totalLength
+            ) {
+                throw (
+                    "{0} download ended at {1} bytes; expected {2} bytes." -f
+                    $Label,
+                    $downloaded,
+                    $totalLength
+                )
+            }
         }
         finally {
             $outputStream.Dispose()
@@ -4029,7 +4092,20 @@ function Download-FileWithProgress {
             $response.Dispose()
         }
 
-        Write-Output ("[DOWNLOAD] {0} 100%" -f $Label)
+        if ($lastPercent -ne 100) {
+            Write-Output (
+                "[DOWNLOAD] 100% | {0} {1} | complete | ETA 00:00" -f
+                $Label,
+                (Format-TransferSize -Bytes $downloaded)
+            )
+        }
+
+        if (
+            -not (Test-Path -LiteralPath $Destination -PathType Leaf) -or
+            (Get-Item -LiteralPath $Destination).Length -lt 1
+        ) {
+            throw "HTTP did not create a valid file for $Label."
+        }
     }
     finally {
         $client.Dispose()
@@ -4342,29 +4418,29 @@ function Download-RequiredArchives {
     )
 
     try {
-        Write-Output "[STAGE] Starting foreground BITS downloads..."
-        Start-BitsDownloadsWithProgress -Downloads $Downloads
-        Write-ToolStep "BITS downloads completed."
-    }
-    catch {
-        Write-ToolStep (
-            "BITS could not complete the downloads: {0}" -f
-            $_.Exception.Message
-        )
-        Write-ToolStep "Falling back to the standard HTTP downloader."
+        Write-Output "[STAGE] Starting streaming HTTPS downloads..."
 
         foreach ($download in $Downloads) {
-            Write-Output (
-                "[STAGE] Downloading {0} with the HTTP fallback..." -f
-                $download.Label
-            )
-
             Download-FileWithProgress `
                 -Url $download.Url `
                 -Destination $download.Destination `
                 -Label $download.Label
         }
+
+        Write-ToolStep "HTTPS downloads completed."
+        return
     }
+    catch {
+        Write-ToolStep (
+            "HTTPS could not complete the downloads: {0}" -f
+            $_.Exception.Message
+        )
+        Write-ToolStep "Falling back to foreground BITS downloads."
+    }
+
+    Write-Output "[STAGE] Starting foreground BITS fallback downloads..."
+    Start-BitsDownloadsWithProgress -Downloads $Downloads
+    Write-ToolStep "BITS fallback downloads completed."
 }
 
 function Install-FileAtomic {
@@ -4503,7 +4579,7 @@ try {
         }
     )
 
-    Write-ToolStep "Starting parallel foreground downloads."
+    Write-ToolStep "Starting streaming HTTPS downloads."
     Download-RequiredArchives -Downloads $downloads
 
     Write-Output "[STAGE] Verifying the cwebp SHA-256 checksum..."
@@ -5063,8 +5139,9 @@ exit /b %errorlevel%
             [System.Text.Encoding]::ASCII
         )
 
-        Append-ActivityLine -Line "Downloading required tools with parallel foreground BITS transfers."
+        Append-ActivityLine -Line "Downloading required tools with streaming HTTPS transfers."
         Append-ActivityLine -Line "Live progress includes downloaded size, transfer speed, and estimated time remaining."
+        Append-ActivityLine -Line "Foreground BITS remains available as an automatic fallback."
         Append-ActivityLine -Line "The FFmpeg ZIP is verified before tools and licenses are installed beside the application."
         Append-ActivityLine -Line ""
 

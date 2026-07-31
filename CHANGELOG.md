@@ -23,6 +23,8 @@
 - Restored skip compatibility for videos tagged by older releases as
   `SYYBOTT'S Media Optimizer`; explicit profile ranks now take precedence over
   inferred CRF ranks.
+- Switched required-tool downloads to streaming HTTPS with live speed and ETA
+  reporting, retaining foreground BITS as an automatic fallback
 
 ### Security
 

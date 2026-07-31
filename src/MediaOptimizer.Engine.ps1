@@ -1,7 +1,7 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 # ============================================================
-# SYYBOTT'S MEDIA OPTIMIZER v1.0.31
+# SYYBOTT'S MEDIA OPTIMIZER ENGINE
 # ============================================================
 # Image mode requires cwebp.exe beside this script.
 # Video mode requires ffmpeg.exe and ffprobe.exe beside this script.
@@ -11,6 +11,34 @@ $ErrorActionPreference = "Stop"
 $MediaOptimizerVersion = "1.0.31"
 $script:ReportRoot = Join-Path $PSScriptRoot "Logs"
 $script:TestOutputRoot = $PSScriptRoot
+$script:JpegMinimumSavingsPct = 5.0
+$script:VideoMinimumSavingsPct = 5.0
+
+function Get-MinimumSavingsDecision {
+    param(
+        [Parameter(Mandatory = $true)][long]$SourceLength,
+        [Parameter(Mandatory = $true)][long]$CandidateLength,
+        [Parameter(Mandatory = $true)][ValidateRange(0, 100)][double]$MinimumSavingsPct
+    )
+
+    [long]$savedBytes = $SourceLength - $CandidateLength
+    [double]$savingsPct = if ($SourceLength -gt 0) {
+        ([double]$savedBytes / [double]$SourceLength) * 100.0
+    } else {
+        0.0
+    }
+    [bool]$isSmaller = $CandidateLength -lt $SourceLength
+
+    return [pscustomobject]@{
+        SourceLength = $SourceLength
+        CandidateLength = $CandidateLength
+        SavedBytes = $savedBytes
+        SavingsPct = $savingsPct
+        MinimumSavingsPct = $MinimumSavingsPct
+        IsSmaller = $isSmaller
+        MeetsMinimum = ($isSmaller -and $savingsPct -ge $MinimumSavingsPct)
+    }
+}
 
 function Read-OptimizationMode {
     while ($true) {
@@ -722,7 +750,11 @@ do {
                     [int]$PngCompression,
 
                     [Parameter(Mandatory = $true)]
-                    [int]$JpegQuality
+                    [int]$JpegQuality,
+
+                    [Parameter(Mandatory = $true)]
+                    [ValidateRange(0, 100)]
+                    [double]$JpegMinimumSavingsPct
                 )
 
                 $candidateRecords = New-Object System.Collections.Generic.List[object]
@@ -939,6 +971,25 @@ do {
                     $winner = $candidateRecords |
                         Sort-Object Length, Preference, Index |
                         Select-Object -First 1
+
+                    if (-not $transparentPngPresent) {
+                        [long]$groupSourceBytes = (
+                            $sourceRecords |
+                                Measure-Object -Property Length -Sum
+                        ).Sum
+                        $groupDecision = Get-MinimumSavingsDecision `
+                            -SourceLength $groupSourceBytes `
+                            -CandidateLength $winner.Length `
+                            -MinimumSavingsPct $JpegMinimumSavingsPct
+                        if (-not $groupDecision.MeetsMinimum) {
+                            throw (
+                                "The duplicate-group WebP would save {0:N2}%; " +
+                                "the configured minimum is {1:N2}%." -f
+                                $groupDecision.SavingsPct,
+                                $JpegMinimumSavingsPct
+                            )
+                        }
+                    }
 
                     foreach ($candidate in $candidateRecords) {
                         if ($candidate.Path -ne $winner.Path) {
@@ -1228,6 +1279,7 @@ do {
                 $existingOutputsUsed = 0
                 $newOutputsCreated = 0
                 $noSavingsDiscards = 0
+                $belowMinimumOutputs = 0
                 $testFailures = 0
                 $sourcesAlreadyTested = 0
                 $sourceNumber = 0
@@ -1356,11 +1408,7 @@ do {
                                     -LiteralPath $candidatePath `
                                     -ErrorAction Stop
 
-                                if (
-                                    (Test-WebPFile -Path $candidatePath) -and
-                                    [long]$candidateFile.Length -lt
-                                    [long]$sourceFile.Length
-                                ) {
+                                if (Test-WebPFile -Path $candidatePath) {
                                     if (-not [string]::Equals(
                                         [IO.Path]::GetFullPath($candidatePath),
                                         [IO.Path]::GetFullPath($outputPath),
@@ -1384,6 +1432,12 @@ do {
                                         [double]$savedBytes /
                                         [double]$sourceFile.Length
                                     ) * 100
+                                    if (
+                                        [long]$candidateFile.Length -ge [long]$sourceFile.Length -or
+                                        $savedPercent -lt $script:JpegMinimumSavingsPct
+                                    ) {
+                                        $belowMinimumOutputs++
+                                    }
 
                                     $existingResult = [PSCustomObject]@{
                                         Quality      = $quality
@@ -1474,22 +1528,6 @@ do {
 
                         $tempFile = Get-Item -LiteralPath $tempPath
 
-                        if ([long]$tempFile.Length -ge [long]$sourceFile.Length) {
-                            $noSavingsDiscards++
-                            Remove-FileSafe -Path $tempPath
-
-                            [void]$qualityResults.Add([PSCustomObject]@{
-                                Quality      = $quality
-                                Status       = "NoSavings"
-                                TestSize     = 0L
-                                SavedBytes   = 0L
-                                SavedPercent = 0.0
-                                OutputPath   = ""
-                                Message      = "No storage savings. Test output discarded."
-                            })
-                            continue
-                        }
-
                         try {
                             Move-Item `
                                 -LiteralPath $tempPath `
@@ -1505,6 +1543,12 @@ do {
                                 [double]$savedBytes /
                                 [double]$sourceFile.Length
                             ) * 100
+                            if (
+                                [long]$outputFile.Length -ge [long]$sourceFile.Length -or
+                                $savedPercent -lt $script:JpegMinimumSavingsPct
+                            ) {
+                                $belowMinimumOutputs++
+                            }
 
                             [void]$qualityResults.Add([PSCustomObject]@{
                                 Quality      = $quality
@@ -1558,6 +1602,15 @@ do {
                                     $result.SavedPercent
                                 ) -ForegroundColor Green
                                 Write-Host "  Existing test output" -ForegroundColor DarkYellow
+                                $thresholdResult = if (
+                                    $result.TestSize -lt $sourceFile.Length -and
+                                    $result.SavedPercent -ge $script:JpegMinimumSavingsPct
+                                ) { "PASS" } else { "FAIL" }
+                                Write-Host (
+                                    "  Savings threshold: {0} (requires {1:N2}%)" -f
+                                    $thresholdResult,
+                                    $script:JpegMinimumSavingsPct
+                                ) -ForegroundColor $(if ($thresholdResult -eq "PASS") { "Green" } else { "DarkYellow" })
                                 Write-Host "  Output: $($result.OutputPath)" -ForegroundColor Yellow
                             }
                             "Created" {
@@ -1569,6 +1622,15 @@ do {
                                     $result.SavedPercent
                                 ) -ForegroundColor Green
                                 Write-Host "  New test output" -ForegroundColor Green
+                                $thresholdResult = if (
+                                    $result.TestSize -lt $sourceFile.Length -and
+                                    $result.SavedPercent -ge $script:JpegMinimumSavingsPct
+                                ) { "PASS" } else { "FAIL" }
+                                Write-Host (
+                                    "  Savings threshold: {0} (requires {1:N2}%)" -f
+                                    $thresholdResult,
+                                    $script:JpegMinimumSavingsPct
+                                ) -ForegroundColor $(if ($thresholdResult -eq "PASS") { "Green" } else { "DarkYellow" })
                                 Write-Host "  Output: $($result.OutputPath)" -ForegroundColor Yellow
                             }
                             "NoSavings" {
@@ -1618,7 +1680,8 @@ do {
                 Write-Host "Already-tested sources skipped: $sourcesAlreadyTested" -ForegroundColor DarkYellow
                 Write-Host "Existing outputs used: $existingOutputsUsed" -ForegroundColor DarkYellow
                 Write-Host "New test outputs created: $newOutputsCreated" -ForegroundColor Green
-                Write-Host "No-savings outputs discarded: $noSavingsDiscards" -ForegroundColor DarkYellow
+                Write-Host "Test outputs below minimum: $belowMinimumOutputs" -ForegroundColor DarkYellow
+                Write-Host ("Minimum JPEG savings required: {0:N2}%" -f $script:JpegMinimumSavingsPct) -ForegroundColor Cyan
                 Write-Host "Test failures: $testFailures" -ForegroundColor $(if ($testFailures -gt 0) { "Red" } else { "Green" })
                 Write-Host "Original files changed: 0" -ForegroundColor Green
                 Write-Host "Output folder: $testFolder" -ForegroundColor Yellow
@@ -2166,6 +2229,7 @@ do {
             $jpgDeleted = 0
             $largerWebpDeleted = 0
             $equalWebpDeleted = 0
+            $jpegMinimumSavingsRejected = 0
             $largerWebpJpgTagsWritten = 0
             $largerWebpJpgTagSkips = 0
             $jpegTagWriteWarnings = 0
@@ -2205,7 +2269,8 @@ do {
                         -Sources $groupRecord.Sources `
                         -FinalWebPPath $groupRecord.FinalPath `
                         -PngCompression $PngCompression `
-                        -JpegQuality $JpegQuality
+                        -JpegQuality $JpegQuality `
+                        -JpegMinimumSavingsPct $script:JpegMinimumSavingsPct
 
                     if (-not $collisionResult.Success) {
                         $failed++
@@ -2295,14 +2360,36 @@ do {
                                 Write-Host "[$current/$total | $progressText] PNG DELETED; existing valid WEBP kept: $sourceName" -ForegroundColor $color
                             }
                             else {
-                                if ($webpLength -lt $sourceLength) {
+                                $minimumDecision = Get-MinimumSavingsDecision `
+                                    -SourceLength $sourceLength `
+                                    -CandidateLength $webpLength `
+                                    -MinimumSavingsPct $script:JpegMinimumSavingsPct
+                                if ($minimumDecision.MeetsMinimum) {
                                     Remove-FileSafe -Path $sourceFile.FullName
                                     $jpgDeleted++
                                     $dataDeleted += $sourceLength
                                     $netSavings += $sourceLength
 
                                     $progressText = Format-NetSavings $netSavings
-                                    Write-Host "[$current/$total | $progressText] JPG/JPEG deleted; existing smaller WEBP kept: $sourceName" -ForegroundColor $color
+                                    Write-Host (
+                                        "[$current/$total | $progressText] JPG/JPEG deleted; existing WEBP saved {0:N2}% (minimum {1:N2}%): {2}" -f
+                                        $minimumDecision.SavingsPct,
+                                        $script:JpegMinimumSavingsPct,
+                                        $sourceName
+                                    ) -ForegroundColor $color
+                                }
+                                elseif ($minimumDecision.IsSmaller) {
+                                    Remove-FileSafe -Path $webpFile.FullName
+                                    $jpegMinimumSavingsRejected++
+                                    $dataDeleted += $webpLength
+                                    $netSavings += $webpLength
+                                    $progressText = Format-NetSavings $netSavings
+                                    Write-Host (
+                                        "[$current/$total | $progressText] Existing WEBP saved {0:N2}%, below the {1:N2}% minimum; JPG/JPEG kept: {2}" -f
+                                        $minimumDecision.SavingsPct,
+                                        $script:JpegMinimumSavingsPct,
+                                        $sourceName
+                                    ) -ForegroundColor DarkYellow
                                 }
                                 elseif ($webpLength -gt $sourceLength) {
                                     Remove-FileSafe -Path $webpFile.FullName
@@ -2456,7 +2543,12 @@ do {
                         }
                     }
                     else {
-                        if ($webpLength -lt $sourceLength) {
+                        $minimumDecision = Get-MinimumSavingsDecision `
+                            -SourceLength $sourceLength `
+                            -CandidateLength $webpLength `
+                            -MinimumSavingsPct $script:JpegMinimumSavingsPct
+
+                        if ($minimumDecision.MeetsMinimum) {
                             try {
                                 Remove-FileSafe -Path $sourceFile.FullName
                                 $jpgDeleted++
@@ -2464,7 +2556,12 @@ do {
                                 $netSavings += ($sourceLength - $webpLength)
 
                                 $progressText = Format-NetSavings $netSavings
-                                Write-Host "[$current/$total | $progressText] CONVERTED; JPG/JPEG deleted; smaller WEBP kept: $sourceName" -ForegroundColor $color
+                                Write-Host (
+                                    "[$current/$total | $progressText] CONVERTED; JPG/JPEG deleted; WEBP saved {0:N2}% (minimum {1:N2}%): {2}" -f
+                                    $minimumDecision.SavingsPct,
+                                    $script:JpegMinimumSavingsPct,
+                                    $sourceName
+                                ) -ForegroundColor $color
                             }
                             catch {
                                 # Roll back the newly created WEBP when source deletion fails.
@@ -2483,6 +2580,26 @@ do {
                                     Add-ImageIssue -Type "ROLLBACK ERROR" -Path $webpFile.FullName -Message $_.Exception.Message
                                 }
 
+                                $deleteErrors++
+                            }
+                        }
+                        elseif ($minimumDecision.IsSmaller) {
+                            try {
+                                Remove-FileSafe -Path $webpFile.FullName
+                                $jpegMinimumSavingsRejected++
+                                $dataDeleted += $webpLength
+                                $progressText = Format-NetSavings $netSavings
+                                Write-Host (
+                                    "[$current/$total | $progressText] WEBP saved {0:N2}%, below the {1:N2}% minimum; JPG/JPEG kept: {2}" -f
+                                    $minimumDecision.SavingsPct,
+                                    $script:JpegMinimumSavingsPct,
+                                    $sourceName
+                                ) -ForegroundColor DarkYellow
+                            }
+                            catch {
+                                $netSavings -= $webpLength
+                                Write-Host "[$current/$total | $progressText] DELETE ERROR: Below-threshold WEBP retained: $sourceName" -ForegroundColor Red
+                                Add-ImageIssue -Type "TEMP DELETE ERROR" -Path $webpFile.FullName -Message $_.Exception.Message
                                 $deleteErrors++
                             }
                         }
@@ -2576,6 +2693,8 @@ do {
             Write-Host "JPG/JPEG originals deleted:      $jpgDeleted" -ForegroundColor Green
             Write-Host "Larger WEBPs deleted:            $largerWebpDeleted" -ForegroundColor Magenta
             Write-Host "Equal-size WEBPs deleted:        $equalWebpDeleted" -ForegroundColor Yellow
+            Write-Host "Below-minimum JPEG outputs:      $jpegMinimumSavingsRejected" -ForegroundColor DarkYellow
+            Write-Host ("Minimum JPEG savings required:   {0:N2}%" -f $script:JpegMinimumSavingsPct) -ForegroundColor Cyan
             Write-Host "Larger-WEBP JPG tags written:    $largerWebpJpgTagsWritten" -ForegroundColor DarkCyan
             Write-Host "Previously tagged JPG skips:     $largerWebpJpgTagSkips" -ForegroundColor DarkCyan
             Write-Host "JPG tag write warnings:          $jpegTagWriteWarnings" -ForegroundColor DarkYellow
@@ -2643,6 +2762,8 @@ do {
             }
             [void]$imageReportLines.Add("PNG originals deleted:           $pngDeleted")
             [void]$imageReportLines.Add("JPG/JPEG originals deleted:      $jpgDeleted")
+            [void]$imageReportLines.Add("Below-minimum JPEG outputs:      $jpegMinimumSavingsRejected")
+            [void]$imageReportLines.Add(("Minimum JPEG savings required:   {0:N2}%" -f $script:JpegMinimumSavingsPct))
             [void]$imageReportLines.Add("Larger WEBPs deleted:            $largerWebpDeleted")
             [void]$imageReportLines.Add("Equal-size WEBPs deleted:        $equalWebpDeleted")
             [void]$imageReportLines.Add("Larger-WEBP JPG tags written:    $largerWebpJpgTagsWritten")
@@ -3054,9 +3175,21 @@ do {
                     }
 
                     $comment = "$($Probe.format.tags.comment)"
+                    $isOptimizerComment = (
+                        $comment -match "(?i)SYYBOTT'S (?:Video|Media) Optimizer"
+                    )
 
                     if (
-                        $comment -match "(?i)SYYBOTT'S Video Optimizer" -and
+                        $isOptimizerComment -and
+                        $comment -match 'Rank=(\d+)'
+                    ) {
+                        return [int]$Matches[1]
+                    }
+
+                    # Legacy markers did not always include Rank. Infer it from
+                    # the CRF only when an explicit rank is unavailable.
+                    if (
+                        $isOptimizerComment -and
                         $comment -match 'CRF=(\d+)'
                     ) {
                         switch ([int]$Matches[1]) {
@@ -3069,13 +3202,6 @@ do {
                             27 { return 5 }
                             28 { return 6 }
                         }
-                    }
-
-                    if (
-                        $comment -match "(?i)SYYBOTT'S Video Optimizer" -and
-                        $comment -match 'Rank=(\d+)'
-                    ) {
-                        return [int]$Matches[1]
                     }
 
                     if ($comment -match "(?i)SYYBOTT'S Media Optimizer TEST") {
@@ -3520,7 +3646,8 @@ do {
                     "CRF=$testCrf | " +
                     "EncoderMode=$testEncoderModeName | " +
                     "Preset=$testPreset | " +
-                    "TestMode=Yes"
+                    "TestMode=Yes | " +
+                    "MinimumSavingsPct=$script:VideoMinimumSavingsPct"
                 )
 
                 $testMaximumWidth = 0
@@ -3537,6 +3664,7 @@ do {
 
                 $existingOutputsUsed = 0
                 $noSavingsDiscards = 0
+                $belowMinimumOutputs = 0
                 $probeErrors = 0
                 $conversionErrors = 0
                 $validationErrors = 0
@@ -3701,20 +3829,6 @@ do {
                             $candidateFile = Get-Item `
                                 -LiteralPath $candidatePath `
                                 -ErrorAction Stop
-
-                            if (
-                                [long]$candidateFile.Length -ge
-                                [long]$sourceFile.Length
-                            ) {
-                                if ([IO.Path]::GetFullPath($candidatePath).StartsWith(
-                                    [IO.Path]::GetFullPath($testFolder).TrimEnd('\') + '\',
-                                    [StringComparison]::OrdinalIgnoreCase
-                                )) {
-                                    Remove-FileSafe -Path $candidatePath
-                                    $noSavingsDiscards++
-                                }
-                                continue
-                            }
 
                             $existingValidation = Test-OptimizedVideo `
                                 -Path $candidatePath `
@@ -3895,16 +4009,6 @@ do {
 
                     $tempFile = Get-Item -LiteralPath $tempPath
 
-                    if ([long]$tempFile.Length -ge [long]$sourceFile.Length) {
-                        $noSavingsDiscards++
-                        Remove-FileSafe -Path $tempPath
-                        Write-Host (
-                            "    No storage savings with this test setting for {0}. Test output discarded." -f
-                            $relativePath
-                        ) -ForegroundColor DarkYellow
-                        continue
-                    }
-
                     try {
                         Move-Item `
                             -LiteralPath $tempPath `
@@ -3931,6 +4035,15 @@ do {
                         [double]$savedBytes /
                         [double]$sourceFile.Length
                     ) * 100
+                    $thresholdResult = if (
+                        $outputFile.Length -lt $sourceFile.Length -and
+                        $savedPercent -ge $script:VideoMinimumSavingsPct
+                    ) {
+                        "PASS"
+                    } else {
+                        $belowMinimumOutputs++
+                        "FAIL"
+                    }
 
                     $retained = $true
 
@@ -3944,6 +4057,11 @@ do {
                         "  Size reduction:  {0:N2}%" -f
                         $savedPercent
                     ) -ForegroundColor Green
+                    Write-Host (
+                        "  Savings threshold: {0} (requires {1:N2}%)" -f
+                        $thresholdResult,
+                        $script:VideoMinimumSavingsPct
+                    ) -ForegroundColor $(if ($thresholdResult -eq "PASS") { "Green" } else { "DarkYellow" })
                     Write-Host "New test output" -ForegroundColor Green
                     Write-Host "Original file changed: No" -ForegroundColor Green
                     Write-Host "Output: $finalPath" -ForegroundColor Yellow
@@ -3956,11 +4074,12 @@ do {
                         Write-Host "No untested source videos remain. All $availableTestVideoCount supported video(s) have already been tested." -ForegroundColor Yellow
                     }
                     else {
-                        Write-Host "Video test finished without a smaller retained output." -ForegroundColor Yellow
+                        Write-Host "Video test finished without a retained output." -ForegroundColor Yellow
                     }
                     Write-Host "Sources tried: $sourcesTried" -ForegroundColor DarkYellow
                     Write-Host "Already-tested sources skipped: $skippedAlreadyTested" -ForegroundColor DarkYellow
-                    Write-Host "No-savings outputs discarded: $noSavingsDiscards" -ForegroundColor DarkYellow
+                    Write-Host "Test outputs below minimum: $belowMinimumOutputs" -ForegroundColor DarkYellow
+                    Write-Host ("Minimum video savings required: {0:N2}%" -f $script:VideoMinimumSavingsPct) -ForegroundColor Cyan
                     Write-Host "Source probe errors: $probeErrors" -ForegroundColor $(if ($probeErrors -gt 0) { "Red" } else { "Green" })
                     Write-Host "Conversion errors: $conversionErrors" -ForegroundColor $(if ($conversionErrors -gt 0) { "Red" } else { "Green" })
                     Write-Host "Validation errors: $validationErrors" -ForegroundColor $(if ($validationErrors -gt 0) { "Red" } else { "Green" })
@@ -4142,7 +4261,7 @@ do {
                 $encoderPreset = "medium"
             }
 
-            $optimizerMarker = "SYYBOTT'S Video Optimizer v$MediaOptimizerVersion | Profile=$profileName | Rank=$profileRank | CRF=$crf | EncoderMode=$encoderModeName | Preset=$encoderPreset"
+            $optimizerMarker = "SYYBOTT'S Video Optimizer v$MediaOptimizerVersion | Profile=$profileName | Rank=$profileRank | CRF=$crf | EncoderMode=$encoderModeName | Preset=$encoderPreset | MinimumSavingsPct=$script:VideoMinimumSavingsPct"
 
             Write-Host ""
             Write-Host "Selected options:" -ForegroundColor Magenta
@@ -4151,6 +4270,7 @@ do {
             Write-Host "Video:               H.264, CRF $crf, $encoderModeName mode, yuv420p" -ForegroundColor White
             Write-Host "Audio:               AAC $audioBitrate stereo when present" -ForegroundColor White
             Write-Host "Output container:    MP4 with faststart" -ForegroundColor White
+            Write-Host ("Minimum savings:    {0:N2}%" -f $script:VideoMinimumSavingsPct) -ForegroundColor White
             Write-Host ""
 
             # =========================
@@ -4287,6 +4407,7 @@ do {
             $originalFilesDeleted = 0
             $largerOutputsDiscarded = 0
             $equalOutputsDiscarded = 0
+            $videoMinimumSavingsRejected = 0
             $collisionSkips = 0
             $alreadyOptimizedSkips = 0
             $staleBackupSkips = 0
@@ -4531,8 +4652,12 @@ do {
 
                     $tempFile = Get-Item -LiteralPath $tempPath
                     [long]$tempLength = $tempFile.Length
+                    $minimumDecision = Get-MinimumSavingsDecision `
+                        -SourceLength $sourceLength `
+                        -CandidateLength $tempLength `
+                        -MinimumSavingsPct $script:VideoMinimumSavingsPct
 
-                    if ($tempLength -lt $sourceLength) {
+                    if ($minimumDecision.MeetsMinimum) {
                         if ($sourceExtension -eq ".mp4") {
                             $sourceMovedToBackup = $false
                             $tempMovedToFinal = $false
@@ -4552,7 +4677,12 @@ do {
                                     $netSavings += ($sourceLength - $tempLength)
 
                                     $progressText = Format-NetSavings $netSavings
-                                    Write-Host "[$current/$total | $progressText] OPTIMIZED MP4 KEPT; original deleted: $sourceName" -ForegroundColor $color
+                                    Write-Host (
+                                        "[$current/$total | $progressText] OPTIMIZED MP4 KEPT; saved {0:N2}% (minimum {1:N2}%); original deleted: {2}" -f
+                                        $minimumDecision.SavingsPct,
+                                        $script:VideoMinimumSavingsPct,
+                                        $sourceName
+                                    ) -ForegroundColor $color
                                 }
                                 catch {
                                     Write-Host "[$current/$total | $progressText] DELETE ERROR: Could not remove MP4 safety backup." -ForegroundColor Red
@@ -4626,7 +4756,12 @@ do {
                                     $netSavings += ($sourceLength - $tempLength)
 
                                     $progressText = Format-NetSavings $netSavings
-                                    Write-Host "[$current/$total | $progressText] CONVERTED TO MP4; original deleted: $sourceName" -ForegroundColor $color
+                                    Write-Host (
+                                        "[$current/$total | $progressText] CONVERTED TO MP4; saved {0:N2}% (minimum {1:N2}%); original deleted: {2}" -f
+                                        $minimumDecision.SavingsPct,
+                                        $script:VideoMinimumSavingsPct,
+                                        $sourceName
+                                    ) -ForegroundColor $color
                                 }
                                 catch {
                                     Write-Host "[$current/$total | $progressText] DELETE ERROR: Original retained; rolling back new MP4." -ForegroundColor Red
@@ -4660,6 +4795,25 @@ do {
                                 Write-Log -Type "REPLACEMENT ERROR" -Path $sourcePath -Message $replacementError
                                 $deleteErrors++
                             }
+                        }
+                    }
+                    elseif ($minimumDecision.IsSmaller) {
+                        try {
+                            Remove-FileSafe -Path $tempPath
+                            $videoMinimumSavingsRejected++
+                            $progressText = Format-NetSavings $netSavings
+                            Write-Host (
+                                "[$current/$total | $progressText] OUTPUT SAVED {0:N2}%, BELOW {1:N2}% MINIMUM; original kept: {2}" -f
+                                $minimumDecision.SavingsPct,
+                                $script:VideoMinimumSavingsPct,
+                                $sourceName
+                            ) -ForegroundColor DarkYellow
+                        }
+                        catch {
+                            $netSavings -= $tempLength
+                            Write-Host "[$current/$total | $progressText] DELETE ERROR: Below-threshold temp output remains: $sourceName" -ForegroundColor Red
+                            Write-Log -Type "TEMP DELETE ERROR" -Path $tempPath -Message $_.Exception.Message
+                            $deleteErrors++
                         }
                     }
                     elseif ($tempLength -gt $sourceLength) {
@@ -4718,6 +4872,8 @@ do {
             Write-Host "Original videos deleted:          $originalFilesDeleted" -ForegroundColor Green
             Write-Host "Larger outputs discarded:         $largerOutputsDiscarded" -ForegroundColor Magenta
             Write-Host "Equal-size outputs discarded:     $equalOutputsDiscarded" -ForegroundColor Yellow
+            Write-Host "Below-minimum outputs discarded:  $videoMinimumSavingsRejected" -ForegroundColor DarkYellow
+            Write-Host ("Minimum video savings required:   {0:N2}%" -f $script:VideoMinimumSavingsPct) -ForegroundColor Cyan
             Write-Host "Already-optimized skips:          $alreadyOptimizedSkips" -ForegroundColor White
             Write-Host "Filename-collision skips:         $collisionSkips" -ForegroundColor DarkYellow
             Write-Host "Existing-backup skips:            $staleBackupSkips" -ForegroundColor DarkYellow
@@ -4784,6 +4940,8 @@ do {
             [void]$videoReportLines.Add("Original videos deleted:          $originalFilesDeleted")
             [void]$videoReportLines.Add("Larger outputs discarded:         $largerOutputsDiscarded")
             [void]$videoReportLines.Add("Equal-size outputs discarded:     $equalOutputsDiscarded")
+            [void]$videoReportLines.Add("Below-minimum outputs discarded:  $videoMinimumSavingsRejected")
+            [void]$videoReportLines.Add(("Minimum video savings required:   {0:N2}%" -f $script:VideoMinimumSavingsPct))
             [void]$videoReportLines.Add("Already-optimized skips:          $alreadyOptimizedSkips")
             [void]$videoReportLines.Add("Filename-collision skips:         $collisionSkips")
             [void]$videoReportLines.Add("Existing-backup skips:            $staleBackupSkips")

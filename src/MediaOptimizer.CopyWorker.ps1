@@ -1,5 +1,5 @@
 ﻿#requires -version 5.1
-# SYYBOTT'S MEDIA OPTIMIZER COPY MODE v1.0.3
+# SYYBOTT'S MEDIA OPTIMIZER COPY MODE
 param(
     [Parameter(Mandatory = $true)][ValidateSet("Image", "Video")][string]$Mode,
     [Parameter(Mandatory = $true)][string]$SourceRoot,
@@ -13,15 +13,121 @@ param(
     [ValidateRange(1, 2)][int]$PngHandling = 2,
     [int]$JpegQuality = 90,
     [int]$JpegHandling = 1,
+    [ValidateRange(0, 100)][double]$JpegMinimumSavingsPct = 5.0,
     [ValidateRange(1, 7)][int]$VideoProfile = 3,
     [int]$EncoderMode = 0,
-    [switch]$VerifyDestination
+    [ValidateRange(0, 100)][double]$VideoMinimumSavingsPct = 5.0,
+    [switch]$VerifyDestination,
+    [string]$ConfirmedRebuildDestination = ""
 )
 
 $ErrorActionPreference = "Stop"
 $CopyModeVersion = "1.0.3"
-$SourceRoot = [IO.Path]::GetFullPath($SourceRoot).TrimEnd('\')
-$DestinationRoot = [IO.Path]::GetFullPath($DestinationRoot).TrimEnd('\')
+
+function Get-MinimumSavingsDecision {
+    param(
+        [Parameter(Mandatory = $true)][long]$SourceLength,
+        [Parameter(Mandatory = $true)][long]$CandidateLength,
+        [Parameter(Mandatory = $true)][ValidateRange(0, 100)][double]$MinimumSavingsPct
+    )
+
+    [long]$savedBytes = $SourceLength - $CandidateLength
+    [double]$savingsPct = if ($SourceLength -gt 0) {
+        ([double]$savedBytes / [double]$SourceLength) * 100.0
+    } else {
+        0.0
+    }
+    [bool]$isSmaller = $CandidateLength -lt $SourceLength
+
+    return [pscustomobject]@{
+        SourceLength = $SourceLength
+        CandidateLength = $CandidateLength
+        SavedBytes = $savedBytes
+        SavingsPct = $savingsPct
+        MinimumSavingsPct = $MinimumSavingsPct
+        IsSmaller = $isSmaller
+        MeetsMinimum = ($isSmaller -and $savingsPct -ge $MinimumSavingsPct)
+    }
+}
+
+function Get-NormalizedDirectoryPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "A directory path cannot be empty."
+    }
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    if ($fullPath -ieq $root) {
+        return $root
+    }
+    return $fullPath.TrimEnd([char[]]@('\', '/'))
+}
+
+function Test-DirectoryContains {
+    param(
+        [Parameter(Mandatory = $true)][string]$Parent,
+        [Parameter(Mandatory = $true)][string]$Child
+    )
+
+    $parentPath = Get-NormalizedDirectoryPath $Parent
+    $childPath = Get-NormalizedDirectoryPath $Child
+    if ($parentPath -ieq $childPath) {
+        return $true
+    }
+    $prefix = $parentPath.TrimEnd([char[]]@('\', '/')) +
+        [IO.Path]::DirectorySeparatorChar
+    return $childPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-SafeRebuildDestination {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ConfirmedPath
+    )
+
+    $destination = Get-NormalizedDirectoryPath $Path
+    $confirmation = if ([string]::IsNullOrWhiteSpace($ConfirmedPath)) {
+        ""
+    }
+    else {
+        Get-NormalizedDirectoryPath $ConfirmedPath
+    }
+    $root = [IO.Path]::GetPathRoot($destination)
+
+    if ($destination -ieq $root) {
+        throw "Copy Mode Rebuild refuses to erase a drive or filesystem root."
+    }
+    if ($confirmation -ine $destination) {
+        throw "Copy Mode Rebuild requires confirmation of the exact resolved destination path."
+    }
+    if (Test-Path -LiteralPath $destination -PathType Container) {
+        $destinationItem = Get-Item -LiteralPath $destination -Force
+        if (
+            ($destinationItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+        ) {
+            throw "Copy Mode Rebuild refuses to erase through a junction, symbolic link, or other reparse point."
+        }
+    }
+
+    foreach ($protectedPath in @(
+        [Environment]::GetFolderPath("Windows"),
+        [Environment]::GetFolderPath("UserProfile"),
+        [Environment]::GetFolderPath("ProgramFiles"),
+        [Environment]::GetFolderPath("ProgramFilesX86")
+    )) {
+        if (
+            -not [string]::IsNullOrWhiteSpace($protectedPath) -and
+            (Get-NormalizedDirectoryPath $protectedPath) -ieq $destination
+        ) {
+            throw "Copy Mode Rebuild refuses to erase a protected operating-system directory."
+        }
+    }
+}
+
+$SourceRoot = Get-NormalizedDirectoryPath $SourceRoot
+$DestinationRoot = Get-NormalizedDirectoryPath $DestinationRoot
 $LogsRoot = [IO.Path]::GetFullPath($LogsRoot)
 $ManifestPath = Join-Path $DestinationRoot ".syybott-media-optimizer-manifest.jsonl"
 $ReportPath = Join-Path $LogsRoot (
@@ -36,6 +142,7 @@ $script:Stats = [ordered]@{
     OriginalsCopied = 0
     ConvertedWebPsCopied = 0
     OptimizedVideosCopied = 0
+    MinimumSavingsRejected = 0
     DuplicateWinners = 0
     ExistingSkipped = 0
     ExistingReplaced = 0
@@ -63,12 +170,6 @@ function Format-Bytes {
 function Get-RelativePath {
     param([string]$Path)
     return $Path.Substring($SourceRoot.Length).TrimStart([char[]]@('\', '/'))
-}
-
-function Test-PathInside {
-    param([string]$Child, [string]$Parent)
-    $parentPrefix = $Parent.TrimEnd('\') + '\'
-    return $Child.StartsWith($parentPrefix, [StringComparison]::OrdinalIgnoreCase)
 }
 
 function Invoke-Native {
@@ -281,15 +382,18 @@ function Get-FreeBytes {
     return [long]([IO.DriveInfo]::new($root).AvailableFreeSpace)
 }
 
-if (Test-PathInside -Child $DestinationRoot -Parent $SourceRoot) {
-    throw "The Copy Mode destination cannot be inside the source library."
-}
-if (Test-PathInside -Child $SourceRoot -Parent $DestinationRoot) {
-    throw "The source library cannot be inside the Copy Mode destination."
+if (
+    (Test-DirectoryContains -Parent $SourceRoot -Child $DestinationRoot) -or
+    (Test-DirectoryContains -Parent $DestinationRoot -Child $SourceRoot)
+) {
+    throw "The source and Copy Mode destination cannot equal or contain one another."
 }
 
 [void](New-Item -ItemType Directory -Path $LogsRoot -Force)
 if ($Policy -eq "Rebuild" -and (Test-Path -LiteralPath $DestinationRoot -PathType Container)) {
+    Assert-SafeRebuildDestination `
+        -Path $DestinationRoot `
+        -ConfirmedPath $ConfirmedRebuildDestination
     Get-ChildItem -LiteralPath $DestinationRoot -Force | Remove-Item -Recurse -Force
 }
 [void](New-Item -ItemType Directory -Path $DestinationRoot -Force)
@@ -299,6 +403,14 @@ Write-Status "SYYBOTT'S MEDIA OPTIMIZER - $Mode COPY MODE" Magenta
 Write-Status "Source: $SourceRoot"
 Write-Status "Destination: $DestinationRoot"
 Write-Status "Policy: $Policy"
+Write-Status (
+    "Minimum savings: {0:N2}%" -f
+    $(if ($Mode -eq "Image") {
+        $JpegMinimumSavingsPct
+    } else {
+        $VideoMinimumSavingsPct
+    })
+)
 Write-Status "The source library remains unchanged." Green
 Write-Status ""
 
@@ -431,7 +543,7 @@ if ($Mode -eq "Image") {
             $baseName = [IO.Path]::GetFileNameWithoutExtension($files[0].Name)
         }
 
-        $sourceKey = "Image:Png=${PngCompression}:PngHandling=${PngHandling}:Jpeg=${JpegQuality}:Handling=${JpegHandling}|" + (($files | Sort-Object FullName | ForEach-Object {
+        $sourceKey = "Image:Png=${PngCompression}:PngHandling=${PngHandling}:Jpeg=${JpegQuality}:Handling=${JpegHandling}:JpegMinSavings=${JpegMinimumSavingsPct}|" + (($files | Sort-Object FullName | ForEach-Object {
             "{0}:{1}:{2}" -f (Get-RelativePath $_.FullName), $_.Length, $_.LastWriteTimeUtc.Ticks
         }) -join "|")
         if ($script:Manifest.ContainsKey($sourceKey)) {
@@ -455,7 +567,7 @@ if ($Mode -eq "Image") {
             if ($file.Extension -ieq ".webp" -and (Test-WebP $file.FullName)) {
                 [void]$candidates.Add([pscustomobject]@{
                     Path=$file.FullName; Length=[long]$file.Length; Relative=(Join-Path $relativeDirectory "$baseName.webp");
-                    Temporary=$false; Type="ExistingWebP"; Lossless=$false
+                    Temporary=$false; Type="ExistingWebP"; Lossless=$false; MeetsMinimum=$true
                 })
                 continue
             }
@@ -465,7 +577,7 @@ if ($Mode -eq "Image") {
             ) {
                 [void]$candidates.Add([pscustomobject]@{
                     Path=$file.FullName; Length=[long]$file.Length; Relative=(Join-Path $relativeDirectory $file.Name);
-                    Temporary=$false; Type="Original"; Lossless=$false
+                    Temporary=$false; Type="Original"; Lossless=$false; MeetsMinimum=$true
                 })
                 continue
             }
@@ -478,24 +590,48 @@ if ($Mode -eq "Image") {
             $result = Invoke-Native -FilePath $CwebpPath -Arguments $arguments
             if ($result.ExitCode -eq 0 -and (Test-WebP $temp)) {
                 $tempFile = Get-Item -LiteralPath $temp
+                $minimumDecision = if ($file.Extension -imatch '^\.jpe?g$') {
+                    Get-MinimumSavingsDecision `
+                        -SourceLength $file.Length `
+                        -CandidateLength $tempFile.Length `
+                        -MinimumSavingsPct $JpegMinimumSavingsPct
+                } else {
+                    [pscustomobject]@{
+                        SavingsPct = 0.0
+                        MeetsMinimum = $true
+                    }
+                }
                 [void]$candidates.Add([pscustomobject]@{
                     Path=$temp; Length=[long]$tempFile.Length; Relative=(Join-Path $relativeDirectory "$baseName.webp");
-                    Temporary=$true; Type="ConvertedWebP"; Lossless=($file.Extension -ieq ".png")
+                    Temporary=$true; Type="ConvertedWebP"; Lossless=($file.Extension -ieq ".png");
+                    MeetsMinimum=$minimumDecision.MeetsMinimum
                 })
+                if (
+                    $file.Extension -imatch '^\.jpe?g$' -and
+                    -not $minimumDecision.MeetsMinimum
+                ) {
+                    $script:Stats.MinimumSavingsRejected++
+                    Write-Status (
+                        "JPEG CANDIDATE REJECTED: {0:N2}% savings; requires {1:N2}%. Original will be copied: {2}" -f
+                        $minimumDecision.SavingsPct,
+                        $JpegMinimumSavingsPct,
+                        (Get-RelativePath $file.FullName)
+                    ) DarkYellow
+                }
             } else {
                 Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
                 $script:Stats.Failures++
             }
             [void]$candidates.Add([pscustomobject]@{
                 Path=$file.FullName; Length=[long]$file.Length; Relative=(Join-Path $relativeDirectory $file.Name);
-                Temporary=$false; Type="Original"; Lossless=($file.Extension -ieq ".png")
+                Temporary=$false; Type="Original"; Lossless=($file.Extension -ieq ".png"); MeetsMinimum=$true
             })
         }
 
         if ($transparentPng.Count -gt 0) {
             $eligible = @($candidates | Where-Object { $_.Lossless })
         } else {
-            $eligible = @($candidates)
+            $eligible = @($candidates | Where-Object { $_.MeetsMinimum })
         }
         $winner = $eligible | Sort-Object Length, @{Expression={if($_.Lossless){0}else{1}}} | Select-Object -First 1
         if ($null -eq $winner) {
@@ -534,7 +670,7 @@ else {
         $relative = Get-RelativePath $source.FullName
         $relativeDirectory = Split-Path -Parent $relative
         $baseName = [IO.Path]::GetFileNameWithoutExtension($source.Name)
-        $sourceKey = "Video:Profile=$VideoProfile:Encoder=$EncoderMode|${relative}:$($source.Length):$($source.LastWriteTimeUtc.Ticks)"
+        $sourceKey = "Video:Profile=$VideoProfile:Encoder=$EncoderMode:MinSavings=$VideoMinimumSavingsPct|${relative}:$($source.Length):$($source.LastWriteTimeUtc.Ticks)"
         Write-Status "[$index/$($groups.Count) | COPY] $relative" Cyan
         if ($script:Manifest.ContainsKey($sourceKey)) {
             $record = $script:Manifest[$sourceKey]
@@ -572,7 +708,8 @@ else {
         $optimizerMarker = (
             "SYYBOTT'S Video Optimizer v1.0.31 | " +
             "Profile=$profileName | Rank=$profileRank | CRF=$profileCrf | " +
-            "EncoderMode=$encoderModeName | Preset=$preset"
+            "EncoderMode=$encoderModeName | Preset=$preset | " +
+            "MinimumSavingsPct=$VideoMinimumSavingsPct"
         )
         $arguments = [Collections.Generic.List[string]]::new()
         foreach ($value in @("-hide_banner","-loglevel","error","-nostdin","-y","-i",$source.FullName,"-map","0:v:0")) { [void]$arguments.Add($value) }
@@ -585,14 +722,31 @@ else {
         $destinationRelative = $relative
         if ($result.ExitCode -eq 0 -and (Test-Video -Path $temp -RequireAudio $hasAudio -SourcePath $source.FullName)) {
             $encoded = Get-Item -LiteralPath $temp
-            if ($encoded.Length -lt $source.Length) {
+            $minimumDecision = Get-MinimumSavingsDecision `
+                -SourceLength $source.Length `
+                -CandidateLength $encoded.Length `
+                -MinimumSavingsPct $VideoMinimumSavingsPct
+            if ($minimumDecision.MeetsMinimum) {
                 $candidate = $encoded
                 $temporary = $true
                 $destinationRelative = Join-Path $relativeDirectory "$baseName.mp4"
                 $script:Stats.OptimizedVideosCopied++
+                Write-Status (
+                    "VIDEO CANDIDATE ACCEPTED: {0:N2}% savings; requires {1:N2}%: {2}" -f
+                    $minimumDecision.SavingsPct,
+                    $VideoMinimumSavingsPct,
+                    $relative
+                ) Green
             } else {
                 Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+                $script:Stats.MinimumSavingsRejected++
                 $script:Stats.OriginalsCopied++
+                Write-Status (
+                    "VIDEO CANDIDATE REJECTED: {0:N2}% savings; requires {1:N2}%. Original copied: {2}" -f
+                    $minimumDecision.SavingsPct,
+                    $VideoMinimumSavingsPct,
+                    $relative
+                ) DarkYellow
             }
         } else {
             Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue

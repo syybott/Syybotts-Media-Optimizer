@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.0-beta.3 - 2026-07-31
+
 ### Changed
 
 - Added independent, persisted minimum-savings thresholds for JPG/JPEG and

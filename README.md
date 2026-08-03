@@ -1,8 +1,3 @@
-﻿# Syybott's Media Optimizer
-
-A Windows application for reducing the storage used by supported image and
-video files while retaining configurable quality.
-
 ## Download
 
 The current Windows release is

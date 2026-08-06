@@ -1111,7 +1111,7 @@ do {
                         )
                         WinnerSource         = $winner.SourceName
                         WinnerSize           = $finalLength
-                        Issues               = @($issues)
+                        Issues               = $issues.ToArray()
                     }
                 }
                 catch {
@@ -1163,7 +1163,7 @@ do {
                         NetSavings            = 0L
                         WinnerSource          = $null
                         WinnerSize            = 0L
-                        Issues                = @($issues)
+                        Issues                = $issues.ToArray()
                     }
                 }
             }

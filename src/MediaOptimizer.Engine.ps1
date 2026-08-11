@@ -8,11 +8,14 @@
 # The selected mode scans this script's folder and normal subfolders.
 # ============================================================
 
-$MediaOptimizerVersion = "1.0.31"
+$MediaOptimizerVersion = "1.0.32"
 $script:ReportRoot = Join-Path $PSScriptRoot "Logs"
 $script:TestOutputRoot = $PSScriptRoot
 $script:JpegMinimumSavingsPct = 5.0
 $script:VideoMinimumSavingsPct = 5.0
+$script:CwebpWorkerCount = 1
+$script:CwebpProcessPriority = "Normal"
+$script:ApplicationSpeedMode = "Max"
 
 function Get-MinimumSavingsDecision {
     param(
@@ -292,7 +295,7 @@ do {
                 }
             }
 
-            function Invoke-CWebP {
+            function Start-CWebP {
                 param(
                     [Parameter(Mandatory = $true)]
                     [string[]]$Arguments
@@ -320,6 +323,24 @@ do {
                 $process.StartInfo = $processInfo
                 [void]$process.Start()
 
+                try {
+                    $process.PriorityClass = $script:CwebpProcessPriority
+                }
+                catch {
+                    # Restricted accounts may not permit priority changes.
+                }
+
+                return [PSCustomObject]@{ Process = $process }
+            }
+
+            function Complete-CWebP {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [object]$Task
+                )
+
+                $process = $Task.Process
+
                 $standardOutput = $process.StandardOutput.ReadToEnd()
                 $standardError = $process.StandardError.ReadToEnd()
 
@@ -332,6 +353,15 @@ do {
 
                 $process.Dispose()
                 return $result
+            }
+
+            function Invoke-CWebP {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [string[]]$Arguments
+                )
+
+                return Complete-CWebP -Task (Start-CWebP -Arguments $Arguments)
             }
 
             function Get-ImageFilesSafe {
@@ -2115,6 +2145,7 @@ do {
 
             Write-Host ""
             Write-Host "Mode summary:" -ForegroundColor Magenta
+            Write-Host "Application speed:             $($script:ApplicationSpeedMode) ($($script:CwebpWorkerCount) cwebp workers)" -ForegroundColor White
             Write-Host "Existing source/WebP pairs:   Cleaned automatically" -ForegroundColor White
             Write-Host "PNG handling:                 $(if ($SkipPngFiles) { 'Skip PNG' } else { 'Process PNG' })" -ForegroundColor White
             Write-Host "JPG/JPEG handling:            $JpegHandlingDescription" -ForegroundColor White
@@ -2192,6 +2223,7 @@ do {
             [void]$imageHeader.Add("Scan root: $targetFolder")
             [void]$imageHeader.Add("")
             [void]$imageHeader.Add("SETTINGS")
+            [void]$imageHeader.Add("Application speed: $($script:ApplicationSpeedMode) ($($script:CwebpWorkerCount) cwebp workers)")
             [void]$imageHeader.Add("PNG handling: $(if ($SkipPngFiles) { 'Skip PNG' } else { 'Process PNG' })")
             [void]$imageHeader.Add("JPG/JPEG handling: $JpegHandlingDescription")
             if (-not $SkipPngFiles) {
@@ -2242,8 +2274,59 @@ do {
             # =========================
 
             $processedCollisionGroups = @{}
+            $queuedConversions = @{}
+            $nextConversionIndex = 0
 
             for ($index = 0; $index -lt $total; $index++) {
+                while (
+                    $nextConversionIndex -lt $total -and
+                    $queuedConversions.Count -lt $script:CwebpWorkerCount
+                ) {
+                    $queuedSource = $allFiles[$nextConversionIndex]
+                    $nextConversionIndex++
+                    $queuedPath = $queuedSource.FullName
+
+                    if ($collisionPaths.ContainsKey($queuedPath)) {
+                        continue
+                    }
+
+                    $queuedWebPPath = [System.IO.Path]::ChangeExtension($queuedPath, ".webp")
+                    if (Test-Path -LiteralPath $queuedWebPPath -PathType Leaf) {
+                        continue
+                    }
+
+                    $queuedExtension = $queuedSource.Extension.ToLowerInvariant()
+                    if (
+                        $queuedExtension -in @(".jpg", ".jpeg") -and
+                        (Test-JpegLargerWebPTag `
+                            -Path $queuedPath `
+                            -SourceLength $queuedSource.Length `
+                            -JpegQuality $JpegQuality `
+                            -CwebpSha256 $CwebpSha256)
+                    ) {
+                        continue
+                    }
+
+                    $queuedTempPath = "$queuedWebPPath.part"
+                    Remove-Item -LiteralPath $queuedTempPath -Force -ErrorAction SilentlyContinue
+                    $queuedArguments = if ($queuedExtension -eq ".png") {
+                        @("-z", "$PngCompression", "-mt", "-o", $queuedTempPath, $queuedPath)
+                    }
+                    else {
+                        @("-preset", "photo", "-q", "$JpegQuality", "-m", "6", "-mt", "-o", $queuedTempPath, $queuedPath)
+                    }
+
+                    try {
+                        $queuedConversions[$queuedPath] = [PSCustomObject]@{
+                            Task = Start-CWebP -Arguments $queuedArguments
+                            TempPath = $queuedTempPath
+                        }
+                    }
+                    catch {
+                        # The serial conversion path retains the original error handling.
+                    }
+                }
+
                 $source = $allFiles[$index]
                 $current = $index + 1
                 $color = $entryColors[$index % $entryColors.Count]
@@ -2441,7 +2524,14 @@ do {
 
                     $tempWebpPath = "$webpPath.part"
 
-                    if (Test-Path -LiteralPath $tempWebpPath -PathType Leaf) {
+                    $hasQueuedConversion = $queuedConversions.ContainsKey(
+                        $sourceFile.FullName
+                    )
+
+                    if (
+                        -not $hasQueuedConversion -and
+                        (Test-Path -LiteralPath $tempWebpPath -PathType Leaf)
+                    ) {
                         try {
                             Remove-FileSafe -Path $tempWebpPath
                         }
@@ -2454,9 +2544,15 @@ do {
                         }
                     }
 
-                    if ($extension -eq ".png") {
+                    if ($hasQueuedConversion) {
+                        $queuedConversion = $queuedConversions[$sourceFile.FullName]
+                        [void]$queuedConversions.Remove($sourceFile.FullName)
+                        $result = Complete-CWebP -Task $queuedConversion.Task
+                    }
+                    elseif ($extension -eq ".png") {
                         $result = Invoke-CWebP -Arguments @(
                             "-z", "$PngCompression",
+                            "-mt",
                             "-o", $tempWebpPath,
                             $sourceFile.FullName
                         )
@@ -2672,6 +2768,11 @@ do {
             }
 
             # =========================
+            foreach ($unusedConversion in @($queuedConversions.Values)) {
+                [void](Complete-CWebP -Task $unusedConversion.Task)
+                Remove-Item -LiteralPath $unusedConversion.TempPath -Force -ErrorAction SilentlyContinue
+            }
+
             # SUMMARY
             # =========================
 

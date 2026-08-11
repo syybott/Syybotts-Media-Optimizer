@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 1.0.0 - 2026-08-10
+
+### Changed
+
+- Made hardware-aware maximum cwebp concurrency the standard image-processing behavior
+- Added a left-aligned Background mode checkbox below Activity that limits cwebp processing to two workers
+- Added bounded parallel cwebp conversion to Modify Mode and Copy Mode while keeping validation, collision handling, file replacement, manifests, and reporting serialized
+- Added cwebp multithreading for lossless PNG conversions
+- Added physical-core detection with CIM, WMI, and logical-processor fallbacks
+- Added application-speed and worker-count details to activity output and reports
+- Changed active-run button colors to the application pink for clearer visual state
+- Saved the last Image and Video operation modes and restored them at startup
+- Reopened folder selection whenever an operation mode is confirmed, defaulting to the previously selected folder
+- Made Process JPG/JPEG the default JPG/JPEG handling option
+- Added independent minimum-savings controls for JPG/JPEG and video replacements
+- Simplified image, video, and diagnostic helper text throughout the interface
+- Removed the redundant status line below Activity and tightened the JPG/JPEG Test Batch layout
+- Moved Background mode away from the JPG/JPEG Test Batch controls to clarify that it applies to application processing speed
+
+### Release
+
+- Promoted the Windows application from beta to the first stable 1.0.0 release
+- Updated component versions to engine 1.0.32 and Copy Mode worker 1.0.4
+
 ## 1.0.0-beta.3 - 2026-07-31
 
 ### Changed

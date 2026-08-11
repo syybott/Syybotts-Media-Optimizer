@@ -1,7 +1,7 @@
 {
-  "productVersion": "1.0.0-beta.4",
-  "fileVersion": "1.0.0.4",
-  "engineVersion": "1.0.31",
-  "copyWorkerVersion": "1.0.3",
+  "productVersion": "1.0.0",
+  "fileVersion": "1.0.0.5",
+  "engineVersion": "1.0.32",
+  "copyWorkerVersion": "1.0.4",
   "ps2exeVersion": "1.0.18"
 }

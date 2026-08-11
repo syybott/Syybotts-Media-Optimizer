@@ -39,7 +39,7 @@ BeforeAll {
 Describe "Video optimizer marker compatibility" {
     It "recognizes the current Video Optimizer marker" {
         $probe = New-ProbeWithComment (
-            "SYYBOTT'S Video Optimizer v1.0.31 | " +
+            "SYYBOTT'S Video Optimizer v1.0.32 | " +
             "Profile=Default | Rank=2 | CRF=24"
         )
         Get-OptimizerProfileRank -Probe $probe | Should -Be 2

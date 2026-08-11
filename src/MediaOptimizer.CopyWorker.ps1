@@ -14,6 +14,8 @@ param(
     [int]$JpegQuality = 90,
     [int]$JpegHandling = 1,
     [ValidateRange(0, 100)][double]$JpegMinimumSavingsPct = 5.0,
+    [ValidateSet("Background", "Max")][string]$ApplicationSpeed = "Max",
+    [ValidateRange(1, 16)][int]$CwebpWorkers = 1,
     [ValidateRange(1, 7)][int]$VideoProfile = 3,
     [int]$EncoderMode = 0,
     [ValidateRange(0, 100)][double]$VideoMinimumSavingsPct = 5.0,
@@ -22,7 +24,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$CopyModeVersion = "1.0.3"
+$CopyModeVersion = "1.0.4"
 
 function Get-MinimumSavingsDecision {
     param(
@@ -172,8 +174,12 @@ function Get-RelativePath {
     return $Path.Substring($SourceRoot.Length).TrimStart([char[]]@('\', '/'))
 }
 
-function Invoke-Native {
-    param([string]$FilePath, [string[]]$Arguments)
+function Start-Native {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments,
+        [string]$Priority = "Normal"
+    )
     $quotedArguments = foreach ($argument in $Arguments) {
         if ($argument -notmatch '[\s"]') { $argument; continue }
         '"' + ($argument -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
@@ -188,6 +194,13 @@ function Invoke-Native {
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $psi
     if (-not $process.Start()) { throw "Could not start $FilePath." }
+    try { $process.PriorityClass = $Priority } catch {}
+    return [pscustomobject]@{ Process = $process }
+}
+
+function Complete-Native {
+    param([Parameter(Mandatory = $true)][object]$Task)
+    $process = $Task.Process
     $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd()
     $process.WaitForExit()
@@ -197,6 +210,11 @@ function Invoke-Native {
     }
     $process.Dispose()
     return $result
+}
+
+function Invoke-Native {
+    param([string]$FilePath, [string[]]$Arguments)
+    return Complete-Native -Task (Start-Native -FilePath $FilePath -Arguments $Arguments)
 }
 
 function Test-WebP {
@@ -403,6 +421,9 @@ Write-Status "SYYBOTT'S MEDIA OPTIMIZER - $Mode COPY MODE" Magenta
 Write-Status "Source: $SourceRoot"
 Write-Status "Destination: $DestinationRoot"
 Write-Status "Policy: $Policy"
+if ($Mode -eq "Image") {
+    Write-Status "Application speed: $ApplicationSpeed ($CwebpWorkers cwebp workers)"
+}
 Write-Status (
     "Minimum savings: {0:N2}%" -f
     $(if ($Mode -eq "Image") {
@@ -428,8 +449,49 @@ if ($Mode -eq "Image") {
         throw "The destination does not have enough free space to start Copy Mode safely."
     }
 
+    $parallelImageFiles = @(
+        $allFiles |
+        Where-Object {
+            ($_.Extension -ieq ".png" -and $PngHandling -ne 1) -or
+            ($_.Extension -iin @(".jpg", ".jpeg") -and $JpegHandling -ne 1)
+        }
+    )
+    $queuedImageConversions = @{}
+    $nextParallelImage = 0
+    $cwebpPriority = if ($ApplicationSpeed -eq "Background") {
+        "BelowNormal"
+    } else {
+        "Normal"
+    }
+
     $index = 0
     foreach ($group in $groups) {
+        while (
+            $nextParallelImage -lt $parallelImageFiles.Count -and
+            $queuedImageConversions.Count -lt $CwebpWorkers
+        ) {
+            $parallelFile = $parallelImageFiles[$nextParallelImage]
+            $nextParallelImage++
+            $parallelTemp = Join-Path ([IO.Path]::GetTempPath()) (
+                "syybott-" + [guid]::NewGuid().ToString("N") + ".webp"
+            )
+            $parallelArguments = if ($parallelFile.Extension -ieq ".png") {
+                @("-z", [string]([math]::Max(0, $PngCompression - 1)), "-mt", "-o", $parallelTemp, $parallelFile.FullName)
+            }
+            else {
+                @("-preset", "photo", "-q", [string]$JpegQuality, "-m", "6", "-mt", "-o", $parallelTemp, $parallelFile.FullName)
+            }
+            try {
+                $queuedImageConversions[$parallelFile.FullName] = [pscustomobject]@{
+                    Task = Start-Native -FilePath $CwebpPath -Arguments $parallelArguments -Priority $cwebpPriority
+                    TempPath = $parallelTemp
+                }
+            }
+            catch {
+                Remove-Item -LiteralPath $parallelTemp -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         $index++
         $files = @($group.Group)
         $relativeDirectory = Split-Path -Parent (Get-RelativePath $files[0].FullName)
@@ -555,6 +617,14 @@ if ($Mode -eq "Image") {
             ) {
                 $script:Stats.ExistingSkipped++
                 Write-Status "RESUMED / ALREADY COMPLETE: $($record.DestinationRelative)" DarkYellow
+                foreach ($completedFile in $files) {
+                    if ($queuedImageConversions.ContainsKey($completedFile.FullName)) {
+                        $unusedConversion = $queuedImageConversions[$completedFile.FullName]
+                        [void]$queuedImageConversions.Remove($completedFile.FullName)
+                        [void](Complete-Native -Task $unusedConversion.Task)
+                        Remove-Item -LiteralPath $unusedConversion.TempPath -Force -ErrorAction SilentlyContinue
+                    }
+                }
                 continue
             }
         }
@@ -581,13 +651,21 @@ if ($Mode -eq "Image") {
                 })
                 continue
             }
-            $temp = Join-Path ([IO.Path]::GetTempPath()) ("syybott-" + [guid]::NewGuid().ToString("N") + ".webp")
-            $arguments = if ($file.Extension -ieq ".png") {
-                @("-z", [string]([math]::Max(0, $PngCompression - 1)), "-o", $temp, $file.FullName)
-            } else {
-                @("-preset", "photo", "-q", [string]$JpegQuality, "-m", "6", "-mt", "-o", $temp, $file.FullName)
+            if ($queuedImageConversions.ContainsKey($file.FullName)) {
+                $queuedConversion = $queuedImageConversions[$file.FullName]
+                [void]$queuedImageConversions.Remove($file.FullName)
+                $temp = $queuedConversion.TempPath
+                $result = Complete-Native -Task $queuedConversion.Task
             }
-            $result = Invoke-Native -FilePath $CwebpPath -Arguments $arguments
+            else {
+                $temp = Join-Path ([IO.Path]::GetTempPath()) ("syybott-" + [guid]::NewGuid().ToString("N") + ".webp")
+                $arguments = if ($file.Extension -ieq ".png") {
+                    @("-z", [string]([math]::Max(0, $PngCompression - 1)), "-mt", "-o", $temp, $file.FullName)
+                } else {
+                    @("-preset", "photo", "-q", [string]$JpegQuality, "-m", "6", "-mt", "-o", $temp, $file.FullName)
+                }
+                $result = Invoke-Native -FilePath $CwebpPath -Arguments $arguments
+            }
             if ($result.ExitCode -eq 0 -and (Test-WebP $temp)) {
                 $tempFile = Get-Item -LiteralPath $temp
                 $minimumDecision = if ($file.Extension -imatch '^\.jpe?g$') {
@@ -649,6 +727,11 @@ if ($Mode -eq "Image") {
         else { $script:Stats.OriginalsCopied++ }
         Copy-Winner -CandidatePath $winner.Path -DestinationRelative $winner.Relative -SourceKey $sourceKey -SourceLength (($files | Measure-Object Length -Sum).Sum) -TemporaryCandidate:$winner.Temporary
     }
+
+    foreach ($unusedConversion in @($queuedImageConversions.Values)) {
+        [void](Complete-Native -Task $unusedConversion.Task)
+        Remove-Item -LiteralPath $unusedConversion.TempPath -Force -ErrorAction SilentlyContinue
+    }
 }
 else {
     $videoFiles = @(Get-SafeFiles -Extensions @(".mp4", ".mkv", ".avi", ".wmv", ".mov", ".webm"))
@@ -706,7 +789,7 @@ else {
             "Balanced"
         }
         $optimizerMarker = (
-            "SYYBOTT'S Video Optimizer v1.0.31 | " +
+            "SYYBOTT'S Video Optimizer v1.0.32 | " +
             "Profile=$profileName | Rank=$profileRank | CRF=$profileCrf | " +
             "EncoderMode=$encoderModeName | Preset=$preset | " +
             "MinimumSavingsPct=$VideoMinimumSavingsPct"

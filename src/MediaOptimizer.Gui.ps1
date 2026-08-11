@@ -57,9 +57,9 @@ $DiagnosticsFolder = Join-Path $LogsFolder "Diagnostics"
 # Windows PowerShell / WinForms
 # ============================================================
 
-$GuiVersion = "1.0.0 Beta 1"
-$EngineVersion = "1.0.31"
-$CopyWorkerVersion = "1.0.3"
+$GuiVersion = "1.0.0"
+$EngineVersion = "1.0.32"
+$CopyWorkerVersion = "1.0.4"
 $VersionManifestPath = Join-Path $ApplicationRoot "version.json"
 if (-not (Test-Path -LiteralPath $VersionManifestPath -PathType Leaf)) {
     $VersionManifestPath = Join-Path (Split-Path -Parent $ApplicationRoot) "version.json"
@@ -207,6 +207,53 @@ function Convert-ToPowerShellSingleQuotedLiteral {
     )
 
     return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Get-ApplicationSpeedSettings {
+    param(
+        [bool]$BackgroundMode = $false
+    )
+
+    $logicalProcessors = [Math]::Max(1, [Environment]::ProcessorCount)
+    $physicalCores = 0
+
+    try {
+        $physicalCores = [int]((
+            Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop |
+            Measure-Object -Property NumberOfCores -Sum
+        ).Sum)
+    }
+    catch {
+        try {
+            $physicalCores = [int]((
+                Get-WmiObject -Class Win32_Processor -ErrorAction Stop |
+                Measure-Object -Property NumberOfCores -Sum
+            ).Sum)
+        }
+        catch {
+            $physicalCores = [Math]::Max(1, [int][Math]::Ceiling($logicalProcessors / 2.0))
+        }
+    }
+
+    if ($physicalCores -lt 1) {
+        $physicalCores = [Math]::Max(1, [int][Math]::Ceiling($logicalProcessors / 2.0))
+    }
+
+    $workerCount = if ($BackgroundMode) {
+        [Math]::Min(2, $logicalProcessors)
+    } else {
+        [Math]::Min(16, [Math]::Max(2, [int][Math]::Round($physicalCores * 0.75)))
+    }
+
+    $workerCount = [Math]::Min($workerCount, $logicalProcessors)
+
+    return [pscustomobject]@{
+        Mode = if ($BackgroundMode) { "Background" } else { "Max" }
+        WorkerCount = [int]$workerCount
+        PhysicalCores = [int]$physicalCores
+        LogicalProcessors = [int]$logicalProcessors
+        Priority = if ($BackgroundMode) { "BelowNormal" } else { "Normal" }
+    }
 }
 
 function Get-RequiredToolPath {
@@ -404,6 +451,8 @@ function Save-ApplicationSettings {
     param(
         [string]$MediaFolder,
         [string]$CopyDestination,
+        [string]$ImageOperationMode,
+        [string]$VideoOperationMode,
         [Nullable[bool]]$DiagnosticsEnabled,
         [Nullable[bool]]$AdvancedVideoProfilesEnabled,
         [Nullable[bool]]$DisableWarnings,
@@ -422,6 +471,16 @@ function Save-ApplicationSettings {
             CopyDestination = if ([string]::IsNullOrWhiteSpace($CopyDestination)) {
                 [string]$current.CopyDestination
             } else { [IO.Path]::GetFullPath($CopyDestination) }
+            ImageOperationMode = if ($ImageOperationMode -in @("Copy", "Modify")) {
+                $ImageOperationMode
+            } else {
+                [string]$current.ImageOperationMode
+            }
+            VideoOperationMode = if ($VideoOperationMode -in @("Copy", "Modify")) {
+                $VideoOperationMode
+            } else {
+                [string]$current.VideoOperationMode
+            }
             DiagnosticsEnabled = if ($null -eq $DiagnosticsEnabled) {
                 [bool]$current.DiagnosticsEnabled
             } else {
@@ -511,12 +570,16 @@ function Save-MediaFolderSetting {
 }
 
 function Select-MediaFolderAndSave {
-    [void][System.Windows.Forms.MessageBox]::Show(
-        "Select the main media folder used by the optimizer.`r`n`r`nWindows ES-DE users should normally select:`r`nES-DE\ES-DE\downloaded_media",
-        "Select media folder",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Information
-    )
+    param([switch]$SkipIntroduction)
+
+    if (-not $SkipIntroduction) {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "Select the main media folder used by the optimizer.`r`n`r`nWindows ES-DE users should normally select:`r`nES-DE\ES-DE\downloaded_media",
+            "Select media folder",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+    }
 
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
     $dialog.Description = "Select the main image and video media folder"
@@ -1779,7 +1842,7 @@ $diagnosticsStatusLabel = New-Object System.Windows.Forms.Label
 $diagnosticsStatusLabel.Text = if ($script:DiagnosticsEnabled) {
     "Logging enabled. Ctrl+Shift+D creates a diagnostic package."
 } else {
-    "Ctrl+Shift+D creates a one-time diagnostic package."
+    "Ctrl+Shift+D creates a one-time diagnostic package"
 }
 $diagnosticsStatusLabel.Location = New-Object System.Drawing.Point(18, 53)
 $diagnosticsStatusLabel.Size = New-Object System.Drawing.Size(925, 48)
@@ -1931,7 +1994,7 @@ $jpegHandlingCombo.Size = New-Object System.Drawing.Size(430, 28)
 $jpegHandlingCombo.DropDownStyle = "DropDownList"
 [void]$jpegHandlingCombo.Items.Add("Skip JPG/JPEG")
 [void]$jpegHandlingCombo.Items.Add("Process JPG/JPEG")
-$jpegHandlingCombo.SelectedIndex = 0
+$jpegHandlingCombo.SelectedIndex = 1
 $imageTab.Controls.Add($jpegHandlingCombo)
 
 $pngCompressionLabel = New-Object System.Windows.Forms.Label
@@ -1971,9 +2034,9 @@ $jpegQualityNumeric.Enabled = $false
 $imageTab.Controls.Add($jpegQualityNumeric)
 
 $jpegQualityHint = New-Object System.Windows.Forms.Label
-$jpegQualityHint.Text = "Higher preserves more detail. Default: 90. For lightweight devices, quality 10 is recommended (honestly it looks pretty good, test it below yourself)."
-$jpegQualityHint.Location = New-Object System.Drawing.Point(305, 167)
-$jpegQualityHint.Size = New-Object System.Drawing.Size(655, 38)
+$jpegQualityHint.Text = "Higher preserves more detail (test below)"
+$jpegQualityHint.Location = New-Object System.Drawing.Point(305, 175)
+$jpegQualityHint.Size = New-Object System.Drawing.Size(655, 25)
 $jpegQualityHint.AutoSize = $false
 $jpegQualityHint.TextAlign = [System.Drawing.ContentAlignment]::TopLeft
 $jpegQualityHint.ForeColor = [System.Drawing.Color]::Silver
@@ -1996,7 +2059,7 @@ $jpegMinimumSavingsNumeric.Value = [decimal]$script:JpegMinimumSavingsPct
 $imageTab.Controls.Add($jpegMinimumSavingsNumeric)
 
 $jpegMinimumSavingsHint = New-Object System.Windows.Forms.Label
-$jpegMinimumSavingsHint.Text = "% required to replace a JPG/JPEG. 0% accepts any strictly smaller valid WebP."
+$jpegMinimumSavingsHint.Text = "% required to replace a JPG/JPEG. 0% accepts any strictly smaller valid WebP"
 $jpegMinimumSavingsHint.Location = New-Object System.Drawing.Point(305, 218)
 $jpegMinimumSavingsHint.Size = New-Object System.Drawing.Size(600, 25)
 $jpegMinimumSavingsHint.ForeColor = [System.Drawing.Color]::Silver
@@ -2005,18 +2068,18 @@ $imageTab.Controls.Add($jpegMinimumSavingsHint)
 $imageTestCheckBox = New-Object System.Windows.Forms.CheckBox
 $imageTestCheckBox.Text = "JPG/JPEG Test Batch"
 $imageTestCheckBox.Location = New-Object System.Drawing.Point(25, 258)
-$imageTestCheckBox.Size = New-Object System.Drawing.Size(200, 25)
+$imageTestCheckBox.Size = New-Object System.Drawing.Size(160, 25)
 $imageTestCheckBox.Checked = $false
 $imageTab.Controls.Add($imageTestCheckBox)
 
 $imageTestCountLabel = New-Object System.Windows.Forms.Label
 $imageTestCountLabel.Text = "Images:"
-$imageTestCountLabel.Location = New-Object System.Drawing.Point(235, 259)
+$imageTestCountLabel.Location = New-Object System.Drawing.Point(170, 259)
 $imageTestCountLabel.Size = New-Object System.Drawing.Size(58, 25)
 $imageTab.Controls.Add($imageTestCountLabel)
 
 $imageTestCountCombo = New-Object System.Windows.Forms.ComboBox
-$imageTestCountCombo.Location = New-Object System.Drawing.Point(295, 255)
+$imageTestCountCombo.Location = New-Object System.Drawing.Point(230, 255)
 $imageTestCountCombo.Size = New-Object System.Drawing.Size(70, 28)
 $imageTestCountCombo.DropDownStyle = "DropDownList"
 1..10 | ForEach-Object {
@@ -2027,7 +2090,7 @@ $imageTestCountCombo.Enabled = $false
 $imageTab.Controls.Add($imageTestCountCombo)
 
 $imageTestQualityCombo = New-Object System.Windows.Forms.ComboBox
-$imageTestQualityCombo.Location = New-Object System.Drawing.Point(375, 255)
+$imageTestQualityCombo.Location = New-Object System.Drawing.Point(310, 255)
 $imageTestQualityCombo.Size = New-Object System.Drawing.Size(245, 28)
 $imageTestQualityCombo.DropDownStyle = "DropDownList"
 [void]$imageTestQualityCombo.Items.Add("Preset qualities: 90, 80, 10")
@@ -2037,7 +2100,7 @@ $imageTestQualityCombo.Enabled = $false
 $imageTab.Controls.Add($imageTestQualityCombo)
 
 $imageTestCustomNumeric = New-Object System.Windows.Forms.NumericUpDown
-$imageTestCustomNumeric.Location = New-Object System.Drawing.Point(630, 256)
+$imageTestCustomNumeric.Location = New-Object System.Drawing.Point(565, 256)
 $imageTestCustomNumeric.Size = New-Object System.Drawing.Size(75, 25)
 $imageTestCustomNumeric.Minimum = 0
 $imageTestCustomNumeric.Maximum = 100
@@ -2111,7 +2174,7 @@ $videoMinimumSavingsNumeric.Value = [decimal]$script:VideoMinimumSavingsPct
 $videoTab.Controls.Add($videoMinimumSavingsNumeric)
 
 $videoMinimumSavingsHint = New-Object System.Windows.Forms.Label
-$videoMinimumSavingsHint.Text = "% required to replace a video. 0% accepts any strictly smaller valid encode."
+$videoMinimumSavingsHint.Text = "% required to replace a video. 0% accepts any strictly smaller valid encode"
 $videoMinimumSavingsHint.Location = New-Object System.Drawing.Point(285, 169)
 $videoMinimumSavingsHint.Size = New-Object System.Drawing.Size(610, 25)
 $videoMinimumSavingsHint.ForeColor = [System.Drawing.Color]::Silver
@@ -2256,7 +2319,7 @@ $encoderModeInfoLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
 $videoTab.Controls.Add($encoderModeInfoLabel)
 
 $videoTestInfoLabel = New-Object System.Windows.Forms.Label
-$videoTestInfoLabel.Text = "Creates one test encode from the first supported video alphabetically. The source is never changed."
+$videoTestInfoLabel.Text = "Creates one test encode from the first supported video alphabetically. The source is never changed"
 $videoTestInfoLabel.Location = New-Object System.Drawing.Point(575, 200)
 $videoTestInfoLabel.Size = New-Object System.Drawing.Size(385, 58)
 $videoTestInfoLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
@@ -2303,12 +2366,27 @@ $progressDisplay.BackColor = [System.Drawing.SystemColors]::Control
 $form.Controls.Add($progressDisplay)
 
 $statusLabel = New-Object System.Windows.Forms.Label
-$statusLabel.Text = "Ready."
+$statusLabel.Text = ""
 $statusLabel.Location = New-Object System.Drawing.Point(22, 620)
 $statusLabel.Size = New-Object System.Drawing.Size(480, 24)
 $statusLabel.Anchor = "Bottom,Left"
 $statusLabel.ForeColor = [System.Drawing.Color]::Silver
+$statusLabel.Visible = $false
 $form.Controls.Add($statusLabel)
+
+$backgroundModeCheckBox = New-Object System.Windows.Forms.CheckBox
+$backgroundModeCheckBox.Text = "Background mode"
+$backgroundModeCheckBox.Location = New-Object System.Drawing.Point(22, 620)
+$backgroundModeCheckBox.Size = New-Object System.Drawing.Size(160, 25)
+$backgroundModeCheckBox.Anchor = "Bottom,Left"
+$backgroundModeCheckBox.CheckAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+$backgroundModeCheckBox.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+$backgroundModeCheckBox.UseVisualStyleBackColor = $false
+$backgroundModeCheckBox.BackColor = [System.Drawing.Color]::Transparent
+$backgroundModeCheckBox.Checked = $false
+$backgroundModeCheckBox.Visible = $true
+$form.Controls.Add($backgroundModeCheckBox)
+$backgroundModeCheckBox.BringToFront()
 
 $startButton = New-Object System.Windows.Forms.Button
 $startButton.Text = "Start"
@@ -3389,7 +3467,7 @@ function Update-VideoOptionNotes {
         $videoProfileInfoLabel.ForeColor = $warningNoteColor
     }
     elseif ($selectedProfileChoice -eq 3) {
-        $videoProfileInfoLabel.Text = "Recommended for desktop PCs, Switch, Steam Deck, or similar devices."
+        $videoProfileInfoLabel.Text = "Recommended for desktop PCs, Switch, Steam Deck, or similar devices"
         $videoProfileInfoLabel.ForeColor = $normalNoteColor
     }
     else {
@@ -3463,6 +3541,7 @@ function Set-ApplicationTheme {
     )
 
     $normalLabels = @(
+        $backgroundModeCheckBox,
         $pngHandlingLabel,
         $pngCompressionLabel,
         $jpegQualityLabel,
@@ -4990,6 +5069,33 @@ function Set-RunControls {
     $exitButton.Enabled = -not $Running
     $openFolderButton.Enabled = -not $Running
 
+    $runButtons = @(
+        $browseButton,
+        $copyDestinationBrowseButton,
+        $downloadToolsButton,
+        $imageDefaultPresetButton,
+        $imageSuperLightPresetButton,
+        $startButton,
+        $cancelButton,
+        $openReportButton,
+        $openFolderButton,
+        $exitButton
+    )
+
+    if ($Running) {
+        $runPink = [System.Drawing.Color]::FromArgb(255, 73, 178)
+        foreach ($button in $runButtons) {
+            $button.UseVisualStyleBackColor = $false
+            $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+            $button.BackColor = $runPink
+            $button.ForeColor = [System.Drawing.Color]::White
+            $button.FlatAppearance.BorderColor = $runPink
+        }
+    }
+    else {
+        Set-ApplicationTheme -Theme $script:CurrentTheme
+    }
+
     if ($Running) {
         $openReportButton.Enabled = $false
     }
@@ -5447,7 +5553,7 @@ function Set-OperationSelection {
             }
         }
         else {
-            $info.Text = "Optimizes the existing media library directly."
+            $info.Text = "Optimizes the existing media library directly"
         }
     }
     $combo.SelectedIndex = 0
@@ -5620,6 +5726,17 @@ function Show-OperationModeSelector {
             -Reason "After $Mode operation-mode chooser"
     }
 
+    if (-not (Select-MediaFolderAndSave -SkipIntroduction)) {
+        Write-DiagnosticLog `
+            -Category "OPTION" `
+            -Message (
+                "$Mode media-folder selection was cancelled; " +
+                "restoring '$current'."
+            )
+        Set-OperationSelection -Mode $Mode -Selection $current
+        return
+    }
+
     if ($selection -eq "Copy" -and -not (Select-CopyDestination)) {
         Write-DiagnosticLog `
             -Category "OPTION" `
@@ -5631,6 +5748,12 @@ function Show-OperationModeSelector {
         return
     }
     Set-OperationSelection -Mode $Mode -Selection $selection
+    if ($Mode -eq "Image") {
+        [void](Save-ApplicationSettings -ImageOperationMode $selection)
+    }
+    else {
+        [void](Save-ApplicationSettings -VideoOperationMode $selection)
+    }
 }
 
 function Select-CopyDestination {
@@ -5853,6 +5976,15 @@ function Start-CopyModeRun {
                 ([double]$jpegMinimumSavingsNumeric.Value).ToString(
                     [Globalization.CultureInfo]::InvariantCulture
                 )
+            ),
+            "-ApplicationSpeed", (Quote-Arg $(if ($backgroundModeCheckBox.Checked) {
+                "Background"
+            } else {
+                "Max"
+            })),
+            "-CwebpWorkers", [string](
+                (Get-ApplicationSpeedSettings `
+                    -BackgroundMode $backgroundModeCheckBox.Checked).WorkerCount
             ),
             "-VideoProfile", [string](Get-SelectedVideoProfileChoice),
             "-EncoderMode", [string]$encoderModeCombo.SelectedIndex,
@@ -6177,6 +6309,25 @@ Proceed?
                 ([double]$videoMinimumSavingsNumeric.Value).ToString(
                     [Globalization.CultureInfo]::InvariantCulture
                 ))
+        )
+        $applicationSpeedMode = if ($backgroundModeCheckBox.Checked) {
+            "Background"
+        } else {
+            "Max"
+        }
+        $applicationSpeedSettings = Get-ApplicationSpeedSettings `
+            -BackgroundMode $backgroundModeCheckBox.Checked
+        $workerSource = $workerSource.Replace(
+            '$script:CwebpWorkerCount = 1',
+            ('$script:CwebpWorkerCount = ' + [string]$applicationSpeedSettings.WorkerCount)
+        )
+        $workerSource = $workerSource.Replace(
+            '$script:CwebpProcessPriority = "Normal"',
+            ('$script:CwebpProcessPriority = "' + $applicationSpeedSettings.Priority + '"')
+        )
+        $workerSource = $workerSource.Replace(
+            '$script:ApplicationSpeedMode = "Max"',
+            ('$script:ApplicationSpeedMode = "' + $applicationSpeedMode + '"')
         )
 
         $workerSource = $workerSource.Replace(
@@ -7282,7 +7433,7 @@ $diagnosticLoggingCheckBox.Add_CheckedChanged({
         [void](Save-ApplicationSettings -DiagnosticsEnabled $false)
         $script:DiagnosticsEnabled = $false
         $diagnosticsStatusLabel.Text = (
-            "Ctrl+Shift+D creates a one-time diagnostic package."
+            "Ctrl+Shift+D creates a one-time diagnostic package"
         )
     }
 })
@@ -7965,6 +8116,22 @@ $form.Add_Shown({
     if (-not [string]::IsNullOrWhiteSpace([string]$savedSettings.CopyDestination)) {
         $copyDestinationTextBox.Text = [string]$savedSettings.CopyDestination
     }
+    $savedImageOperation = if (
+        [string]$savedSettings.ImageOperationMode -in @("Copy", "Modify")
+    ) {
+        [string]$savedSettings.ImageOperationMode
+    } else {
+        ""
+    }
+    $savedVideoOperation = if (
+        [string]$savedSettings.VideoOperationMode -in @("Copy", "Modify")
+    ) {
+        [string]$savedSettings.VideoOperationMode
+    } else {
+        ""
+    }
+    Set-OperationSelection -Mode Image -Selection $savedImageOperation
+    Set-OperationSelection -Mode Video -Selection $savedVideoOperation
     if (-not (Test-AllRequiredTools)) {
         Request-ToolDownload
     }

@@ -1,24 +1,21 @@
 ## Download
 
-The current Windows release is
-[v1.0.0-beta.3](https://github.com/syybott/Syybotts-Media-Optimizer/releases/tag/v1.0.0-beta.3).
+The current Windows release is [v1.0.0](https://github.com/syybott/Syybotts-Media-Optimizer/releases/tag/v1.0.0)
 The application is portable and does not require a separate installer. The ZIP
 contains the EXE and its SHA-256 file at the archive root
 
-- [Download the Windows ZIP package](https://github.com/syybott/Syybotts-Media-Optimizer/releases/download/v1.0.0-beta.3/SYYBOTTS-Media-Optimizer-1.0.0-beta.3.zip)
+- [Download the Windows ZIP package](https://github.com/syybott/Syybotts-Media-Optimizer/releases/download/v1.0.0/SYYBOTTS-Media-Optimizer-1.0.0.zip)
 
 On first use, select **Download Tools** to install verified copies of cwebp,
-FFmpeg, and ffprobe beside the application. Tool downloads use streaming HTTPS
-with live size, speed, and ETA reporting, with foreground BITS available as an
-automatic fallback
+FFmpeg, and ffprobe beside the application
 
 ## Quick start
 
 1. Download the ZIP package
 2. Use **Extract All** so Windows creates the application folder
-3. Run the EXE and choose the media library folder
-4. Select **Download Tools** if the required tools are not already available
-5. Use a Test mode before processing a full library
+3. Run the EXE and download the required tools (cwebp and ffmpeg)
+4. Use a Test mode before processing your entire library of JPG/JPEG. Be sure you are viewing the test images on the target device before proceeding. If you are in modify mode, you will only be able to complete this process one time
+5. Once you have fully processed your library be sure that ES-DE scraper settings are set to not modify your existing files or ES-DE will replace your newly created webp files with png/jpg files and you will have to complete the conversion of your library again
 
 ## Modes
 

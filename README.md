@@ -1,6 +1,7 @@
 ## Download
 
 The current Windows release is [v1.0.0](https://github.com/syybott/Syybotts-Media-Optimizer/releases/tag/v1.0.0)
+=======
 The application is portable and does not require a separate installer. The ZIP
 contains the EXE and its SHA-256 file at the archive root
 
